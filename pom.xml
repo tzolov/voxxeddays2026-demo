@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.2</version>
+		<relativePath />
+	</parent>
+
+	<groupId>com.example</groupId>
+	<artifactId>voxxeddays2026-demo</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>voxxeddays2026-demo</name>
+	<description>VoxxedDays 2026 Spring AI Demo</description>
+
+	<properties>
+		<java.version>17</java.version>
+		<spring-ai.version>2.0.0-M4</spring-ai.version>
+		<tool-search-tool.version>2.1.0</tool-search-tool.version>
+	</properties>
+
+	<modules>
+		<module>common</module>
+		<module>01-system-instructions</module>
+		<module>02-structured-output</module>
+		<module>03-chat-memory</module>
+		<module>04-prompt-stuffing</module>
+		<module>05-rag</module>
+		<module>06-guardrails-safe-input</module>
+		<module>07-guardrails-json</module>
+		<module>08-tools</module>
+		<module>09-tools-with-memory</module>
+		<module>10-tool-search-tool</module>
+		<module>11-llm-as-a-judge</module>
+		<module>12-tool-argument-augmenter</module>
+	</modules>
+
+	<!-- Common dependencies inherited by all sub-modules -->
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<!-- Netty DNS resolver for macOS -->
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-resolver-dns-native-macos</artifactId>
+			<classifier>osx-aarch_64</classifier>
+		</dependency>
+	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<repositories>
+		<repository>
+			<id>spring-milestones</id>
+			<name>Spring Milestones</name>
+			<url>https://repo.spring.io/milestone</url>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
+		<repository>
+			<id>spring-snapshots</id>
+			<name>Spring Snapshots</name>
+			<url>https://repo.spring.io/snapshot</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+		</repository>
+	</repositories>
+
+</project>
