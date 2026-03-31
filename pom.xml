@@ -37,6 +37,10 @@
 		<module>10-tool-search-tool</module>
 		<module>11-llm-as-a-judge</module>
 		<module>12-tool-argument-augmenter</module>
+		<module>13-mcp/mcp-server</module>
+		<module>13-mcp/mcp-client</module>
+		<module>14-a2a/subagent-a2a-demo</module>
+		<module>14-a2a/airbnb-agent</module>
 	</modules>
 
 	<!-- Common dependencies inherited by all sub-modules -->

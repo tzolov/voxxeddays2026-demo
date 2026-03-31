@@ -22,12 +22,15 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 
 	public final boolean showConversationHistory;
 
+	public final String labelPrefix;
+
 	private MyLoggingAdvisor(int order, boolean showSystemMessage, boolean showAvailableTools,
-			boolean showConversationHistory) {
+			boolean showConversationHistory, String labelPrefix) {
 		this.order = order;
 		this.showSystemMessage = showSystemMessage;
 		this.showAvailableTools = showAvailableTools;
 		this.showConversationHistory = showConversationHistory;
+		this.labelPrefix = labelPrefix;
 	}
 
 	@Override
@@ -38,7 +41,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 	@Override
 	public ChatClientRequest before(ChatClientRequest chatClientRequest, AdvisorChain advisorChain) {
 
-		StringBuilder sb = new StringBuilder("\nUSER: ");
+		StringBuilder sb = new StringBuilder("\n" + this.labelPrefix + "USER: ");
 
 		if (this.showSystemMessage && chatClientRequest.prompt().getSystemMessage() != null
 				&& StringUtils.hasText(chatClientRequest.prompt().getSystemMessage().getText())) {
@@ -85,7 +88,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 
 	@Override
 	public ChatClientResponse after(ChatClientResponse chatClientResponse, AdvisorChain advisorChain) {
-		StringBuilder sb = new StringBuilder("\nASSISTANT: ");
+		StringBuilder sb = new StringBuilder("\n" + this.labelPrefix + "ASSISTANT: ");
 
 		if (chatClientResponse.chatResponse() == null || chatClientResponse.chatResponse().getResults() == null) {
 			sb.append(" No chat response ");
@@ -164,6 +167,8 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 
 		private boolean showConversationHistory = false;
 
+		private String labelPrefix = "";
+
 		public Builder order(int order) {
 			this.order = order;
 			return this;
@@ -184,9 +189,14 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 			return this;
 		}
 
+		public Builder labelPrefix(String labelPrefix) {
+			this.labelPrefix = labelPrefix;
+			return this;
+		}
+
 		public MyLoggingAdvisor build() {
 			MyLoggingAdvisor advisor = new MyLoggingAdvisor(this.order, this.showSystemMessage, this.showAvailableTools,
-					this.showConversationHistory);
+					this.showConversationHistory, this.labelPrefix);
 			return advisor;
 		}
 
