@@ -14,11 +14,6 @@
 
 	<dependencies>
 		<dependency>
-			<groupId>com.example</groupId>
-			<artifactId>common</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-openai-sdk</artifactId>
 		</dependency>

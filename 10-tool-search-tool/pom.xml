@@ -13,11 +13,6 @@
 	<description>Spring AI: tool search tool</description>
 
 	<dependencies>
-		<dependency>
-			<groupId>com.example</groupId>
-			<artifactId>common</artifactId>
-			<version>${project.version}</version>
-		</dependency>
 		
 		<dependency>
 			<groupId>org.springframework.ai</groupId>

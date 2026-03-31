@@ -21,9 +21,7 @@ public class DemoApplication {
 		return args -> { // @formatter:off
 
 			ChatClient chatClient = chatClientBuilder
-				.defaultAdvisors(MyLoggingAdvisor.builder()
-					.order(0)
-					.build())
+				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
 			// GUARDRAILS - Safe Input

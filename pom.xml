@@ -21,6 +21,7 @@
 		<java.version>17</java.version>
 		<spring-ai.version>2.0.0-M4</spring-ai.version>
 		<tool-search-tool.version>2.1.0</tool-search-tool.version>
+		<spring-ai-agent-utils.version>0.6.0-SNAPSHOT</spring-ai-agent-utils.version>
 	</properties>
 
 	<modules>
@@ -35,8 +36,8 @@
 		<module>08-tools</module>
 		<module>09-tools-with-memory</module>
 		<module>10-tool-search-tool</module>
-		<module>11-llm-as-a-judge</module>
-		<module>12-tool-argument-augmenter</module>
+		<module>11-agents-llm-as-a-judge</module>
+		<module>12-agents-tool-argument-augmenter</module>
 		<module>13-agents-skills</module>
 		<module>14-agents-todo-write</module>
 		<module>15-agents-ask-user-question</module>
@@ -45,11 +46,18 @@
 		<module>17-mcp/mcp-client</module>
 		<module>18-a2a/subagent-a2a-demo</module>
 		<module>18-a2a/airbnb-agent</module>
-		
+
 	</modules>
 
 	<!-- Common dependencies inherited by all sub-modules -->
 	<dependencies>
+		
+		<dependency>
+			<groupId>com.example</groupId>
+			<artifactId>common</artifactId>
+			<version>${project.version}</version>
+		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>

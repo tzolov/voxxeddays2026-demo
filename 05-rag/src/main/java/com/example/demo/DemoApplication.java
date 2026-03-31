@@ -30,10 +30,7 @@ public class DemoApplication {
 		return args -> { // @formatter:off
 
 			ChatClient chatClient = chatClientBuilder
-				.defaultAdvisors(MyLoggingAdvisor.builder()
-					.order(Ordered.HIGHEST_PRECEDENCE + 2000)
-					.showConversationHistory(true)
-					.build())
+				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
 			// RAG

@@ -32,14 +32,13 @@ public class DemoApplication {
 					.showAvailableTools(true)
 					.build();
 
-			var toolCallAdvisor = ToolCallAdvisor.builder().build();
+			// var toolCallAdvisor = ToolCallAdvisor.builder().build();
 			
 			var smarthToolCallAdvisor = ToolSearchToolCallAdvisor.builder()
 				.toolSearcher(toolSearcher)
 				.referenceToolNameAccumulation(false)
 				// .maxResults(2)
 				.build();
-
 
 			ChatClient chatClient = chatClientBuilder
 				.defaultTools(new MyTools(), new DummyTools())

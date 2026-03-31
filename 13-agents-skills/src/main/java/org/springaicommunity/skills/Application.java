@@ -3,6 +3,7 @@ package org.springaicommunity.skills;
 import java.io.IOException;
 import java.util.List;
 
+import com.example.demo.MyLoggingAdvisor;
 import org.springaicommunity.agent.tools.BraveWebSearchTool;
 import org.springaicommunity.agent.tools.FileSystemTools;
 import org.springaicommunity.agent.tools.ShellTools;
@@ -48,8 +49,7 @@ public class Application {
 					// Brave web search tool
 					BraveWebSearchTool.builder(System.getenv("BRAVE_API_KEY"))
 						.resultCount(15).build())
-				
-				
+								
 				.defaultAdvisors(
 					// Tool Calling advisor
 					ToolCallAdvisor.builder().build(),
@@ -61,17 +61,26 @@ public class Application {
 				.build();
 				// @formatter:on
 
-			var answer = chatClient
-				.prompt("""
-					Explain reinforcement learning in simple terms and use.
-					Use required skills.
-					Then use the Youtube video https://youtu.be/vXtfdGphr3c?si=xy8U2Al_Um5vE4Jd transcript to support your answer.
-					Use absolute paths for the skills and scripts. Do not ask me for more details.
+			var answer = chatClient.prompt("""
+					What skills do you have and how can you help me with my requests?
 					""")
 				.call()
 				.content();
 
+			System.out.println("Supported Skills: " + answer);
+
+			answer = chatClient.prompt("""
+					Explain reinforcement learning in simple terms and use.
+					Use required skills.
+					Then use the Youtube video
+					https://youtu.be/vXtfdGphr3c?si=xy8U2Al_Um5vE4Jd transcript to support
+					your answer.
+					Use absolute paths for the skills and scripts. Do not ask me for more
+					details.
+					""").call().content();
+
 			System.out.println("The Answer: " + answer);
+
 		};
 
 	}
