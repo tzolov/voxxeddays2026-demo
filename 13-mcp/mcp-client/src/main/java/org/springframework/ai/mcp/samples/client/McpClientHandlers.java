@@ -26,18 +26,18 @@ public class McpClientHandlers {
 	@Autowired
 	private ChatClient.Builder chatClientBuilder;
 
-	@McpProgress(clients = "server1")
+	@McpProgress(clients = "poet-server")
 	public void progressHandler(ProgressNotification progressNotification) {
 		logger.info("MCP PROGRESS: [{}] progress: {} total: {} message: {}", progressNotification.progressToken(),
 				progressNotification.progress(), progressNotification.total(), progressNotification.message());
 	}
 
-	@McpLogging(clients = "server1")
+	@McpLogging(clients = "poet-server")
 	public void loggingHandler(LoggingMessageNotification loggingMessage) {
 		logger.info("MCP LOGGING: [{}] {}", loggingMessage.level(), loggingMessage.data());
 	}
 
-	@McpSampling(clients = "server1")
+	@McpSampling(clients = "poet-server")
 	public CreateMessageResult samplingHandler(CreateMessageRequest llmRequest) {
 
 		logger.info("MCP SAMPLING: {}", llmRequest);

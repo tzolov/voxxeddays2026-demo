@@ -17,7 +17,6 @@ package org.springframework.ai.mcp.sample.server;
 
 import java.time.LocalDateTime;
 
-import io.modelcontextprotocol.spec.McpSchema.CreateMessageResult;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -31,22 +30,14 @@ import org.springframework.web.client.RestClient;
  * @author Christian Tzolov
  */
 @Service
-public class WeatherService {
+public class Tools {
 
 	private final RestClient restClient = RestClient.create();
-
-	/**
-	 * The response format from the Open-Meteo API
-	 */
-	public record WeatherResponse(Current current) {
-		public record Current(LocalDateTime time, int interval, double temperature_2m) {
-		}
-	}
 
 	@McpTool(description = "Greeting response")
 	public String hello(String myName) {
 		return "Hello " + myName + "!";
-	}	
+	}
 
 	@McpTool(description = "Get the temperature (in celsius) for a specific location")
 	public String poeticWeatherForecast(McpSyncRequestContext context,
@@ -65,25 +56,31 @@ public class WeatherService {
 
 		context.progress(50);
 
-		String poem = "None";
+		String weatherPoem = "none";
 
-		context.info("Start sampling");
-
+		
 		if (context.sampleEnabled()) {
-			CreateMessageResult sampleResponse = context.sample(spec -> spec.systemPrompt("You are a poet!")
+			context.info("Start sampling");
+
+			var sampleResponse = context.sample(spec -> spec.systemPrompt("You are a poet!")
 				.message(
 						"Please write a poem about this weather forecast (temperature is in Celsius). Use markdown format :\n "
 								+ weatherJson));
 
-			poem = ((TextContent) sampleResponse.content()).text();
+			weatherPoem = ((TextContent) sampleResponse.content()).text();
+
+			context.info("Finish Sampling");
 		}
 
-		context.info("Finish Sampling");
 		context.progress(100);
 
-		// logger.info(poem.toString(), responseWithPoems.toString());
-
-		return "Poem about the weather: " + poem + "\n" + weatherJson;
+		return "Poem about the weather: " + weatherPoem + "\n" + weatherJson;
 
 	}
+
+	public record WeatherResponse(Current current) {
+		public record Current(LocalDateTime time, int interval, double temperature_2m) {
+		}
+	}
+
 }
