@@ -51,12 +51,6 @@
 
 	<!-- Common dependencies inherited by all sub-modules -->
 	<dependencies>
-		
-		<dependency>
-			<groupId>com.example</groupId>
-			<artifactId>common</artifactId>
-			<version>${project.version}</version>
-		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -72,6 +66,11 @@
 
 	<dependencyManagement>
 		<dependencies>
+			<dependency>
+				<groupId>com.example</groupId>
+				<artifactId>common</artifactId>
+				<version>${project.version}</version>
+			</dependency>
 			<dependency>
 				<groupId>org.springframework.ai</groupId>
 				<artifactId>spring-ai-bom</artifactId>

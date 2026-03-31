@@ -23,6 +23,11 @@
 	<dependencyManagement>
 		<dependencies>
 			<dependency>
+				<groupId>com.example</groupId>
+				<artifactId>common</artifactId>
+				<version>0.0.1-SNAPSHOT</version>
+			</dependency>
+			<dependency>
 				<groupId>org.springframework.ai</groupId>
 				<artifactId>spring-ai-bom</artifactId>
 				<version>${spring-ai.version}</version>
@@ -33,6 +38,10 @@
 	</dependencyManagement>
 
 	<dependencies>
+		<dependency>
+			<groupId>com.example</groupId>
+			<artifactId>common</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
