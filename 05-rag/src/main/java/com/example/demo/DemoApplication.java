@@ -26,6 +26,11 @@ public class DemoApplication {
 	Resource hurricaneDocs;
 
 	@Bean
+	VectorStore vectorStore(EmbeddingModel embeddingModel) {
+		return SimpleVectorStore.builder(embeddingModel).build();
+	}
+
+	@Bean
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, VectorStore vectorStore) {
 		return args -> { // @formatter:off
 
@@ -47,11 +52,6 @@ public class DemoApplication {
 			System.out.println(answer);
 
 		}; // @formatter:on
-	}
-
-	@Bean
-	VectorStore vectorStore(EmbeddingModel embeddingModel) {
-		return SimpleVectorStore.builder(embeddingModel).build();
 	}
 
 }

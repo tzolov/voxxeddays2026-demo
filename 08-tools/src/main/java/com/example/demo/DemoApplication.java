@@ -24,11 +24,10 @@ public class DemoApplication {
 					.build())
 				.build();
 
-			// TOOLS
 			var output = chatClient.prompt()
+				.user("What should I wear today in Amsterdam and in Barcelona?")
 				.tools(new WeatherTools())
 				.advisors(ToolCallAdvisor.builder().build())
-				.user("What should I wear today in Amsterdam and in Barcelona?")
 				.call()
 				.content();
 				

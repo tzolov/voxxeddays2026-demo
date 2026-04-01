@@ -3,7 +3,7 @@ package com.example.demo;
 import java.nio.charset.Charset;
 import java.util.List;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,23 +32,19 @@ public class DemoApplication {
 				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
-			// SYSTEM INSTRUCTIONS & PROMPT STUFFING & STRUCTURED OUTPUT
 			record Track(String name, List<Talk> talks) {
 				record Talk(String time, String session, String location, String track, List<String> authors) {}
 			}
 
 			List<Track> talks = chatClient.prompt()
-				.system("You are a useful assistant. Follow the user instructions.")
 				.user(u -> u.text("""
-						Get the list of talks grouped by tracks :\n {additionalContext}.
-						List only the sessions with more than 1 speakers""")
-					.param("additionalContext", asText(conferenceAgenda)))
+								Get the list of talks grouped by tracks :\n {additionalContext}.
+								List only the sessions with more than 1 speakers""")
+							.param("additionalContext", asText(conferenceAgenda)))
 				.call()
 				.entity(new ParameterizedTypeReference<List<Track>>() {});
-
-			System.out.println(talks);
 			
-			System.out.println(new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(talks));
+			System.out.println(new JsonMapper().writerWithDefaultPrettyPrinter().writeValueAsString(talks));
 
 		}; // @formatter:on
 	}

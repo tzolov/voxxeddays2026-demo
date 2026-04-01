@@ -24,16 +24,19 @@ public class DemoApplication {
 				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
-			// STRUCTURED OUTPUT
+			// Desired ouput
 			record ActorsFilms(String actor, List<String> movies) {}
 
 			ActorsFilms actorsFilms = chatClient.prompt()
+				// Uses LLM's native structured output capabilities if available
+				// or fall back to Spring AI's generic structured output support
+				// if not.
 				.advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT)
 				.user("Generate the filmography of 5 movies for Tom Hanks.")
 				.call()
 				.entity(ActorsFilms.class);
 
-			System.out.println("\n -------------------------- \n" + actorsFilms);
+			System.out.println("Answer: \n" + actorsFilms);
 
 		}; // @formatter:on
 	}

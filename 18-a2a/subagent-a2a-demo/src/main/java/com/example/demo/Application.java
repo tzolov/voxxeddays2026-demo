@@ -107,7 +107,7 @@ public class Application {
 						.order(Ordered.HIGHEST_PRECEDENCE + 1000)
 						.build(),
 
-					MyLoggingAdvisor.builder().labelPrefix("[MAIN]").showAvailableTools(true).order(0).build()) // logging advisor
+					MyLoggingAdvisor.builder().labelPrefix("[]").showAvailableTools(true).order(0).build()) // logging advisor
 
 				.build();
 				// @formatter:on

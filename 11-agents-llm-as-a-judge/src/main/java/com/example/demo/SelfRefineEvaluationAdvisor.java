@@ -126,7 +126,7 @@ public class SelfRefineEvaluationAdvisor implements CallAdvisor, StreamAdvisor {
 
 			// Early exit - no evaluation needed (e.g., tool call)
 			if (this.skipEvaluationPredicate.test(chatClientRequest, response)) {
-				logger.debug("Skipping evaluation because skipEvaluationPredicate returned true.");
+				logger.info("Skipping evaluation because skipEvaluationPredicate returned true.");
 				return response;
 			}
 

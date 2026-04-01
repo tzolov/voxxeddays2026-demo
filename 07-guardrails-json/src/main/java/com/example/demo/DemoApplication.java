@@ -27,7 +27,6 @@ public class DemoApplication {
 					.build())
 				.build();
 
-			// GUARDRAILS - JSON
 			record ActorsFilms(String actor, List<String> movies) {}
 
 			var validationAdvisor = StructuredOutputValidationAdvisor.builder()

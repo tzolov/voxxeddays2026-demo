@@ -21,13 +21,13 @@ public class DemoApplication {
 				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
-			// SYSTEM INSTRUCTIONS
 			String answer = chatClient.prompt()
 				.system("Impersonate Yoda (from Star Wars). Keep the jokes clean, short and family friendly.")
 				.user("Tell me a joke?")
 				.call()
 				.content();
-			System.out.println("\n -------------------------------- \n" + answer);
+
+			System.out.println("Answer: \n" + answer);
 
 		}; // @formatter:on
 	}
