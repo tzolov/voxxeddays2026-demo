@@ -13,6 +13,7 @@ import org.springaicommunity.agent.tools.SkillsTool;
 import org.springaicommunity.agent.tools.SmartWebFetchTool;
 import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.task.TaskTool;
+import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentReferences;
 import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 
@@ -59,6 +60,7 @@ public class Application {
 
 					.braveApiKey(braveApiKey)
 					.build())
+					.subagentReferences(ClaudeSubagentReferences.fromResources(agentPaths))
 				.build();
 
 			ChatClient chatClient = chatClientBuilder // @formatter:off

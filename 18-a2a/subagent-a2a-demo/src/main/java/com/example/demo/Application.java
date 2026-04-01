@@ -56,7 +56,7 @@ public class Application {
 				.skillsResources(skillPaths)
 				.chatClientBuilder("default", chatClientBuilder.clone()
 					.defaultAdvisors(
-							MyLoggingAdvisor.builder().labelPrefix("[TASK]").order(0).showAvailableTools(true).build())
+							MyLoggingAdvisor.builder().labelPrefix("[SUB-AGENT]").order(0).showAvailableTools(true).build())
 					.defaultTools(weatherTools)
 					.defaultOptions(ToolCallingChatOptions.builder().model("claude-haiku-4-5-20251001").build()))
 				.braveApiKey(braveApiKey)

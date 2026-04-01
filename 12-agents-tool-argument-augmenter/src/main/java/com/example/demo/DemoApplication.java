@@ -35,14 +35,9 @@ public class DemoApplication {
 					required = true) List<String> memoryNotes) {
 	}
 
-	public record MyResponse(String result, AgentThinking thinking) {
-	}
-
 	@Bean
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder) {
 		return args -> { // @formatter:off
-
-
 
 			AugmentedToolCallbackProvider<AgentThinking> provider = AugmentedToolCallbackProvider
 				.<AgentThinking>builder()
@@ -74,7 +69,7 @@ public class DemoApplication {
 			var answer = chatClient
 				.prompt("What is current weather in Paris?")
 				.call()
-				.entity(MyResponse.class);
+				.content();
 				
 			System.out.println("\n -------------------------------- \n" + answer);
 
