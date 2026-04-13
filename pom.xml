@@ -48,6 +48,7 @@
 		<module>17-mcp/mcp-client</module>
 		<module>18-a2a/subagent-a2a-demo</module>
 		<module>18-a2a/airbnb-agent</module>
+		<module>19-auto-memory</module>
 
 	</modules>
 
