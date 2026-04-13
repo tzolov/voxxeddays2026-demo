@@ -8,8 +8,8 @@
 		<artifactId>voxxeddays2026-demo</artifactId>
 		<version>0.0.1-SNAPSHOT</version>
 	</parent>
-	<artifactId>03-memory-session</artifactId>
-	<name>03 - Memory Session</name>
+	<artifactId>20-memory-session</artifactId>
+	<name>20 - Memory Session</name>
 	<description>Spring AI: chat memory with MessageWindowChatMemory</description>
 
 	<dependencies>
