@@ -30,7 +30,7 @@ export BRAVE_API_KEY=your-brave-key
 ```
 Find the top 10 Tom Hanks movies, then group them in groups of 2,
 and finally print the title name inverted (e.g. last char first).
-Use TodoWrite to organize your tasks.
+Use TodoWrite to organize your tasks. Do it in 2 steps
 ```
 
 **Progress output:**

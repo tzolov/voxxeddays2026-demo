@@ -3,6 +3,7 @@ package org.springaicommunity.agent;
 import java.util.List;
 import java.util.Scanner;
 
+import com.example.demo.MyLoggingAdvisor;
 import org.springaicommunity.agent.tools.BraveWebSearchTool;
 import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
@@ -62,6 +63,7 @@ public class Application {
 
 				// Advisors
 				.defaultAdvisors(
+					MyLoggingAdvisor.builder().showSystemMessage(true).build(),
 					ToolCallAdvisor.builder().disableInternalConversationHistory().build(),
 					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build()) .build())
 				.build();

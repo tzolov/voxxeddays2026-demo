@@ -14,6 +14,10 @@ import org.springframework.util.StringUtils;
 
 public class MyLoggingAdvisor implements BaseAdvisor {
 
+	private static final String ORANGE = "\033[38;5;208m";
+
+	private static final String RESET = "\033[0m";
+
 	private final int order;
 
 	public final boolean showSystemMessage;
@@ -81,7 +85,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 				.toList());
 		}
 
-		System.out.println(sb.toString());
+		System.out.println(ORANGE + sb.toString() + RESET);
 
 		return chatClientRequest;
 	}
@@ -115,7 +119,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 			}
 		}
 
-		System.out.println(sb.toString());
+		System.out.println(ORANGE + sb.toString() + RESET);
 
 		return chatClientResponse;
 	}

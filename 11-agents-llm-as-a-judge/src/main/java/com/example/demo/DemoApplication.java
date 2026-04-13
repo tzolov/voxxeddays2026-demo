@@ -22,10 +22,10 @@ public class DemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(AnthropicChatModel anthropicChatModel, OllamaChatModel ollamaChatModel) {
+	public CommandLineRunner cli(AnthropicChatModel mainChatModel, OllamaChatModel ollamaChatModel) {
 		return args -> { // @formatter:off
 
-			ChatClient chatClient = ChatClient.builder(anthropicChatModel)
+			ChatClient chatClient = ChatClient.builder(mainChatModel)
 
 				.defaultTools(new MyTools())
 				
@@ -63,14 +63,14 @@ public class DemoApplication {
 
 	static class MyTools {
 
-		final int[] temperatures = { -125, 15, 20, -255 };
+		final int[] temperatures = { -125, 15, -255 };
 
 		private final Random random = new Random();
 
 		@Tool(description = "Get the current weather for a given location")
 		public String weather(String location) {
 			int temperature = temperatures[random.nextInt(temperatures.length)];
-			System.out.println(">>> Tool Call responseTemp: " + temperature);
+			System.out.println("              responseTemp: " + temperature);
 			return "The current weather in " + location + " is sunny with a temperature of " + temperature + "°C.";
 		}
 
