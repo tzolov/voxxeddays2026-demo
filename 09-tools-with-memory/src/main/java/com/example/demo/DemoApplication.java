@@ -2,7 +2,8 @@ package com.example.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
+import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -33,9 +34,10 @@ public class DemoApplication {
 			var output = chatClient.prompt()
 				.tools(new WeatherTools())
 				.advisors(
-					ToolCallAdvisor.builder().disableInternalConversationHistory().build(),
+					ToolCallingAdvisor.builder().disableInternalConversationHistory().build(),
 					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().build())
 						.order(Ordered.HIGHEST_PRECEDENCE + 1000).build())
+				.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "session-1234"))
 				.user("What should I wear today in Amsterdam and in Barcelona?")
 				.call().content();
 			System.out.println("\n" + output);

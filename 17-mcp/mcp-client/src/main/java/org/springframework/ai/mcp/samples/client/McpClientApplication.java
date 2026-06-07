@@ -35,7 +35,7 @@ public class McpClientApplication {
 
 		return args -> {
 
-			ChatClient chatClient = chatClientBuilder.defaultToolCallbacks(toolCallbackProvider).build();
+			ChatClient chatClient = chatClientBuilder.defaultTools(toolCallbackProvider).build();
 
 			String userQuestion = """
 					What is the weather in Amsterdam right now?
@@ -47,4 +47,5 @@ public class McpClientApplication {
 			System.out.println("> ASSISTANT: " + chatClient.prompt(userQuestion).call().content());
 		};
 	}
+
 }

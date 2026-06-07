@@ -13,7 +13,7 @@
 	<groupId>org.springaicommunity</groupId>
 	<artifactId>subagent-a2a-demo</artifactId>
 
-	<name>subagent-a2a-demo</name>
+	<name>18 - subagent-a2a-demo</name>
 	<description>Demo project for Spring Boot</description>
 
 	<properties>
@@ -71,7 +71,7 @@
 
 		<!-- <dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-openai-sdk</artifactId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency> -->
 
 		<!-- <dependency>

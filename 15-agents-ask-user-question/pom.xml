@@ -13,7 +13,7 @@
 	<groupId>org.springaicommunity</groupId>
 	<artifactId>ask-user-question-demo</artifactId>
 	
-	<name>ask-user-question-demo</name>
+	<name>15 - ask-user-question-demo</name>
 	<description>Demo project for Spring Boot</description>
 
 	<properties>
@@ -46,7 +46,7 @@
 
 		<!-- <dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-openai-sdk</artifactId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency> -->
 
 		<dependency>

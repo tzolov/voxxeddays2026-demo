@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.augment.AugmentedToolCallbackProvider;
@@ -39,7 +38,7 @@ public class DemoApplication {
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder) {
 		return args -> { // @formatter:off
 
-			AugmentedToolCallbackProvider<AgentThinking> provider = AugmentedToolCallbackProvider
+			AugmentedToolCallbackProvider<AgentThinking> augmentedTools = AugmentedToolCallbackProvider
 				.<AgentThinking>builder()
 				.toolObject(new MyTools())
 				.argumentType(AgentThinking.class)
@@ -50,7 +49,7 @@ public class DemoApplication {
 					// Log the LLM's reasoning - great for debugging and observability
 					logger.info("LLM Reasoning: {}", thinking.innerThought());
 					logger.info("Confidence: {}", thinking.confidence());
-					logger.info("Thinking notest: {}", thinking.memoryNotes());
+					logger.info("Thinking notes: {}", thinking.memoryNotes());
 
 					// Access additional context from the event
 					logger.info("Tool: {}", event.toolDefinition().name());
@@ -60,8 +59,7 @@ public class DemoApplication {
 				.build();
 
 			ChatClient chatClient = chatClientBuilder // @formatter:off
-					.defaultToolCallbacks(provider)
-					.defaultAdvisors(ToolCallAdvisor.builder().build())
+					.defaultTools(augmentedTools)
 					.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 

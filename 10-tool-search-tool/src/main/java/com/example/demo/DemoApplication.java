@@ -2,14 +2,14 @@ package com.example.demo;
 
 import java.time.LocalDateTime;
 import java.util.List;
-
-import org.springaicommunity.tool.search.ToolSearchToolCallAdvisor;
-import org.springaicommunity.tool.search.ToolSearcher;
+import java.util.stream.Collectors;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
+import org.springframework.ai.chat.client.advisor.toolsearch.ToolSearchToolCallingAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.ai.tool.toolsearch.ToolIndex;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -24,18 +24,16 @@ public class DemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, ToolSearcher toolSearcher) {
+	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, ToolIndex toolIndex) {
 		return args -> { // @formatter:off
 
 			var loggingAdvisor = MyLoggingAdvisor.builder()
 					.order(Ordered.HIGHEST_PRECEDENCE + 2000)
 					.showAvailableTools(true)
 					.build();
-
-			var toolCallAdvisor = ToolCallAdvisor.builder().build();
 			
-			var smarthToolCallAdvisor = ToolSearchToolCallAdvisor.builder()
-				.toolSearcher(toolSearcher)
+			var smarthToolCallAdvisor = ToolSearchToolCallingAdvisor.builder()
+				.toolIndex(toolIndex)
 				.referenceToolNameAccumulation(false)
 				// .maxResults(2)
 				.build();
@@ -45,6 +43,7 @@ public class DemoApplication {
 				.defaultAdvisors(smarthToolCallAdvisor)
 				.defaultAdvisors(loggingAdvisor)
 				.defaultAdvisors(new TokenCounterAdvisor())
+				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, "chat_memory_conversation_id"))
 				.build();
 
 			var answer = chatClient.prompt("""
@@ -52,7 +51,8 @@ public class DemoApplication {
 					Please suggest clothing shops that are open right now in the area.
 
 					Do not make assumptions about the date, time. Use the tools for getting the current time.
-					""").call().content();
+					""").stream().content()
+					.collectList().block().stream().collect(Collectors.joining());
 
 			System.out.println(answer);
 

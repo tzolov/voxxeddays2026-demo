@@ -12,7 +12,7 @@
 	<groupId>com.example</groupId>
 	<artifactId>mcp-client</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>Spring AI - MCP Starter Default Client</name>
+	<name>17 - (mcp client) Spring AI - MCP Starter Default Client</name>
 	<description>Spring AI - MCP Starter Default Client</description>
 
 	<properties>

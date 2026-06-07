@@ -8,8 +8,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.util.JsonHelper;
 import org.springframework.util.StringUtils;
 
 public class MyLoggingAdvisor implements BaseAdvisor {
@@ -59,7 +59,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 				tools = toolOptions.getToolCallbacks().stream().map(tc -> tc.getToolDefinition().name()).toList();
 			}
 
-			sb.append("\n - TOOLS: " + ModelOptionsUtils.toJsonString(tools));
+			sb.append("\n - TOOLS: " + new JsonHelper().toJson(tools));
 		}
 
 		Message lastMessage = chatClientRequest.prompt().getLastUserOrToolResponseMessage();

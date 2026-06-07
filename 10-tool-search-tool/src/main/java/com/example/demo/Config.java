@@ -15,10 +15,10 @@
 */
 package com.example.demo;
 
-import org.springaicommunity.tool.search.ToolSearcher;
-import org.springaicommunity.tool.searcher.VectorToolSearcher;
 
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.tool.toolsearch.ToolIndex;
+import org.springframework.ai.tool.toolsearch.index.vectorstore.VectorToolIndex;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.context.annotation.Bean;
@@ -36,8 +36,8 @@ public class Config {
 	}
 
 	@Bean
-	ToolSearcher vectorToolSearcher(VectorStore vectorStore) {
-		return new VectorToolSearcher(vectorStore);
+	ToolIndex vectorToolSearcher(VectorStore vectorStore) {
+		return new VectorToolIndex(vectorStore);
 	}
 
 }

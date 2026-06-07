@@ -19,10 +19,9 @@
 
 	<properties>
 		<java.version>17</java.version>
-		<spring-ai.version>2.0.0-M4</spring-ai.version>
-		<tool-search-tool.version>2.1.0</tool-search-tool.version>
-		<spring-ai-agent-utils.version>0.7.0</spring-ai-agent-utils.version>
-		<spring-ai-session.version>0.2.0</spring-ai-session.version>
+		<spring-ai.version>2.0.0-RC1</spring-ai.version>
+		<spring-ai-agent-utils.version>0.9.0</spring-ai-agent-utils.version>
+		<spring-ai-session.version>0.4.1</spring-ai-session.version>
 	</properties>
 
 	<modules>
@@ -34,6 +33,7 @@
 		<module>05-rag</module>
 		<module>06-guardrails-safe-input</module>
 		<module>07-guardrails-json</module>
+		<module>07.1-built-in-guardrails-json</module>		
 		<module>08-tools</module>
 		<module>09-tools-with-memory</module>
 		<module>10-tool-search-tool</module>

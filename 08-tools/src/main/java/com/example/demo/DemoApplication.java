@@ -1,7 +1,7 @@
 package com.example.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
+import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -27,7 +27,7 @@ public class DemoApplication {
 			var output = chatClient.prompt()
 				.user("What should I wear today in Amsterdam and in Barcelona?")
 				.tools(new WeatherTools())
-				.advisors(ToolCallAdvisor.builder().build())
+				// .advisors(ToolCallingAdvisor.builder().build())
 				.call()
 				.content();
 				

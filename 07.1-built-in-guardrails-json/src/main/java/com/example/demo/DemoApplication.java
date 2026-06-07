@@ -3,8 +3,6 @@ package com.example.demo;
 import java.util.List;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.ChatClientAttributes;
-import org.springframework.ai.chat.client.advisor.StructuredOutputValidationAdvisor;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -30,20 +28,10 @@ public class DemoApplication {
 
 			record ActorsFilms(String actor, List<String> movies) {}
 
-			var validationAdvisor = StructuredOutputValidationAdvisor.builder()
-				.outputType(ActorsFilms.class)
-				.maxRepeatAttempts(3)
-				.build();
-
-			ActorsFilms actorsFilms = chatClient.prompt()
-			
-				.advisors(a -> a.advisors(validationAdvisor)
-								// Uses native structured output capabilities if available
-								.param(ChatClientAttributes.STRUCTURED_OUTPUT_NATIVE.getKey(), true))
-
+			ActorsFilms actorsFilms = chatClient.prompt()			
 				.user("Generate the filmography of 5 movies for Tom Hanks.")
 				.call()
-				.entity(ActorsFilms.class);
+				.entity(ActorsFilms.class, e ->  e.useProviderStructuredOutput().validateSchema());
 	
 			System.out.println(actorsFilms);
 

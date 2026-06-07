@@ -22,7 +22,7 @@ import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
-import org.springframework.ai.model.ModelOptionsUtils;
+import org.springframework.ai.util.JsonHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
@@ -50,7 +50,7 @@ public class Tools {
 			.retrieve()
 			.body(WeatherResponse.class);
 
-		var weatherJson = ModelOptionsUtils.toJsonStringPrettyPrinter(weather);
+		var weatherJson = new JsonHelper().toJson(weather);
 
 		context.info("Raw weather response: " + weatherJson);
 

@@ -2,6 +2,7 @@ package com.example.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -27,6 +28,7 @@ public class DemoApplication {
 					.showConversationHistory(true)
 					.build())
 				.defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, "chat_memory_conversation_id"))
 				.build();
 			
 			System.out.println("Name introduction: " + chatClient.prompt("My name is Christian Tzolov").call().content());

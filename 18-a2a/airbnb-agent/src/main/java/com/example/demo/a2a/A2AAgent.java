@@ -1,21 +1,16 @@
 package com.example.demo.a2a;
 
 import java.util.List;
-import java.util.stream.Stream;
 
 import io.a2a.server.agentexecution.AgentExecutor;
 import io.a2a.spec.AgentCapabilities;
 import io.a2a.spec.AgentCard;
 import io.a2a.spec.AgentSkill;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springaicommunity.a2a.server.executor.DefaultAgentExecutor;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.CommandLineRunner;
-import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -27,7 +22,7 @@ import org.springframework.context.annotation.Bean;
  * @author Christian Tzolov
  * @since 0.1.0
  */
-@SpringBootApplication
+// @SpringBootApplication
 public class A2AAgent {
 
 	@Bean

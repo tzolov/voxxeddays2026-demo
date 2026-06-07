@@ -6,6 +6,7 @@ import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.tool.annotation.Tool;
@@ -32,14 +33,14 @@ public class DemoApplication {
 				.defaultAdvisors(SelfRefineEvaluationAdvisor.builder()
 					.order(0)
 					.chatClientBuilder(ChatClient.builder(ollamaChatModel))
-					.maxRepeatAttempts(15)
+					.maxRepeatAttempts(3)
 					.successRating(4)
 					.build())
 
-				.defaultAdvisors(ToolCallAdvisor.builder()
-					.advisorOrder(1)
-					.disableInternalConversationHistory()
-					.build())
+				// .defaultAdvisors(ToolCallAdvisor.builder()
+				// 	.advisorOrder(1)
+				// 	.disableInternalConversationHistory()
+				// 	.build())
 
 				.defaultAdvisors(MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().build())
 					.order(2)
@@ -53,6 +54,7 @@ public class DemoApplication {
 
 			var answer = chatClient
 				.prompt("What is current weather in Paris?")
+				.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "conversation-id-1234"))
 				.call()
 				.content();
 

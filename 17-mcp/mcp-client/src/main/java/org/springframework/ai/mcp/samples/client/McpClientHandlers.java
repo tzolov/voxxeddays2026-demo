@@ -5,6 +5,7 @@ import io.modelcontextprotocol.spec.McpSchema.Content;
 import io.modelcontextprotocol.spec.McpSchema.CreateMessageRequest;
 import io.modelcontextprotocol.spec.McpSchema.CreateMessageResult;
 import io.modelcontextprotocol.spec.McpSchema.LoggingMessageNotification;
+import io.modelcontextprotocol.spec.McpSchema.Role;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +44,9 @@ public class McpClientHandlers {
 			.call()
 			.content();
 
-		return CreateMessageResult.builder().content(new McpSchema.TextContent(response)).build();
+		return CreateMessageResult
+			.builder(Role.ASSISTANT, McpSchema.TextContent.builder(response).build(), "dummy model")
+			.build();
 	};
 
 }

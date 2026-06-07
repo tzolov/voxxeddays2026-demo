@@ -12,7 +12,7 @@
 
 	<groupId>org.springaicommunity</groupId>
 	<artifactId>todo-demo</artifactId>
-	<name>todo-demo</name>
+	<name>14 - todo-demo</name>
 	<description>Demo project for Spring Boot</description>
 
 	<properties>
@@ -32,20 +32,20 @@
 			<version>${spring-ai-agent-utils.version}</version>
 		</dependency>
 
-		<!-- <dependency>
-			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-anthropic</artifactId>
-		</dependency> -->
-
-		<!-- <dependency>
-			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-openai-sdk</artifactId>
-		</dependency> -->
-
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-google-genai</artifactId>
+			<artifactId>spring-ai-starter-model-anthropic</artifactId>
 		</dependency>
+
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
+		</dependency> -->
+
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-google-genai</artifactId>
+		</dependency> -->
 
 		<dependency>
 			<groupId>org.springframework.ai</groupId>

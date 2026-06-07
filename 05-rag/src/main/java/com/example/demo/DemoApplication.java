@@ -12,7 +12,6 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.core.Ordered;
 import org.springframework.core.io.Resource;
 
 @SpringBootApplication
@@ -34,14 +33,16 @@ public class DemoApplication {
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, VectorStore vectorStore) {
 		return args -> { // @formatter:off
 
+			// Load the PDF document, split it into chunks, and add to the vector store
+			// (Onetime, offline operation)
+			vectorStore.add(				
+				TokenTextSplitter.builder().build().split(
+					new PagePdfDocumentReader(hurricaneDocs).read()));
+
 			ChatClient chatClient = chatClientBuilder
 				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
-			// RAG
-			vectorStore.add(				
-				TokenTextSplitter.builder().build().split(
-					new PagePdfDocumentReader(hurricaneDocs).read()));
 
 			var answer = chatClient.prompt()
 				.advisors(QuestionAnswerAdvisor.builder(vectorStore).build())

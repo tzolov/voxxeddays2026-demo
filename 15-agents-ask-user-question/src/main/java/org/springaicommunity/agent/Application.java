@@ -7,16 +7,17 @@ import org.springaicommunity.agent.utils.CommandLineQuestionHandler;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.Ordered;
 
 @SpringBootApplication
 public class Application {
-	
+
 	public static void main(String[] args) {
 		SpringApplication.run(Application.class, args);
 	}
@@ -35,8 +36,9 @@ public class Application {
 					.build())
 
 				.defaultAdvisors(
-					ToolCallAdvisor.builder().disableInternalConversationHistory().build(),
-					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build()).build())
+					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build())
+					// Ensure it runs inside the tool call advisor
+					.order(Ordered.HIGHEST_PRECEDENCE + 900).build())
 
 				.build();
 				// @formatter:on
@@ -47,9 +49,13 @@ public class Application {
 			try (Scanner scanner = new Scanner(System.in)) {
 				while (true) {
 					System.out.print("\nUSER: ");
-					System.out.println("\nASSISTANT: " + chatClient.prompt(scanner.nextLine()).call().content());
+					System.out.println("\nASSISTANT: " + chatClient.prompt(scanner.nextLine())
+						.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "conversation-id-1234"))
+						.call()
+						.content());
 				}
 			}
 		};
 	}
+
 }

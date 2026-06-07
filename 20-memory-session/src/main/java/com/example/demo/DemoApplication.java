@@ -45,9 +45,13 @@ public class DemoApplication {
 				.defaultAdvisors(sessionMemoryAdvisor)
 				.build();
 			
-			System.out.println("Name introduction: " + chatClient.prompt("My name is Christian Tzolov").call().content());
+			System.out.println("Name introduction: " + chatClient.prompt("My name is Christian Tzolov")
+				.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "alice"))
+				.call().content());
 			
-			System.out.println("Asking for the name: " + chatClient.prompt("What is my name?").call().content());
+			System.out.println("Asking for the name: " + chatClient.prompt("What is my name?")
+				.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "alice"))
+				.call().content());
 
 		}; // @formatter:on
 	}

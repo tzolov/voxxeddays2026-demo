@@ -23,7 +23,6 @@ import org.springaicommunity.agent.utils.AgentEnvironment;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,10 +54,13 @@ public class Application {
 			var localSubagentTypes = ClaudeSubagentType.builder()
 				.skillsResources(skillPaths)
 				.chatClientBuilder("default", chatClientBuilder.clone()
-					.defaultAdvisors(
-							MyLoggingAdvisor.builder().labelPrefix("[SUB-AGENT]").order(0).showAvailableTools(true).build())
+					.defaultAdvisors(MyLoggingAdvisor.builder()
+						.labelPrefix("[SUB-AGENT]")
+						.order(0)
+						.showAvailableTools(true)
+						.build())
 					.defaultTools(weatherTools)
-					.defaultOptions(ToolCallingChatOptions.builder().model("claude-haiku-4-5-20251001").build()))
+					.defaultOptions(ToolCallingChatOptions.builder().model("claude-haiku-4-5-20251001")))
 				.braveApiKey(braveApiKey)
 				.build();
 
@@ -81,13 +83,13 @@ public class Application {
 					.param(AgentEnvironment.AGENT_MODEL_KEY, agentModel)
 					.param(AgentEnvironment.AGENT_MODEL_KNOWLEDGE_CUTOFF_KEY, agentModelKnowledgeCutoff))
 
-				// Sub-agent task tool callbacks
-				.defaultToolCallbacks(taskTools)
-
-				// Agent Skills tool
-				.defaultToolCallbacks(SkillsTool.builder().addSkillsResources(skillPaths).build())
-				
 				.defaultTools(
+					// Sub-agent task tool callbacks
+					taskTools,
+
+					// Agent Skills tool
+					SkillsTool.builder().addSkillsResources(skillPaths).build(),
+				
 					// Task orchestration tools
 					TodoWriteTool.builder().build(),
 
@@ -101,13 +103,11 @@ public class Application {
 
 				// Advisors
 				.defaultAdvisors(
-					ToolCallAdvisor.builder().disableInternalConversationHistory().build(),
-
 					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build())
 						.order(Ordered.HIGHEST_PRECEDENCE + 1000)
 						.build(),
 
-					MyLoggingAdvisor.builder().labelPrefix("[]").showAvailableTools(true).order(0).build()) // logging advisor
+					MyLoggingAdvisor.builder().labelPrefix("[]").showAvailableTools(true).order(0).build())
 
 				.build();
 				// @formatter:on

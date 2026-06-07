@@ -11,7 +11,6 @@ import org.springaicommunity.agent.tools.SkillsTool;
 import org.springaicommunity.agent.tools.SmartWebFetchTool;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -35,24 +34,25 @@ public class Application {
 			ChatClient chatClient = chatClientBuilder // @formatter:off
 				.defaultSystem("Always use the available skills to assist the user in their requests.")
 
-				// Skills tool
-				.defaultToolCallbacks(SkillsTool.builder().addSkillsResources(agentSkillsDirs).build())
-
-				// Built-in tools
 				.defaultTools(
+					// Skills tool
+					SkillsTool.builder().addSkillsResources(agentSkillsDirs).build(),
+
 					//Bash execution tool
 					ShellTools.builder().build(),// built-in shell tools
+
 					// Read, Write and Edit files tool
 					FileSystemTools.builder().build(),// built-in file system tools
+
 					// Smart web fetch tool
 					SmartWebFetchTool.builder(chatClientBuilder.clone().build()).build(),
+
 					// Brave web search tool
 					BraveWebSearchTool.builder(System.getenv("BRAVE_API_KEY"))
-						.resultCount(15).build())
+						.resultCount(15).build()
+				)
 								
 				.defaultAdvisors(
-					// Tool Calling advisor
-					ToolCallAdvisor.builder().build(),
 					// Custom logging advisor
 					MyLoggingAdvisor.builder()
 						.showAvailableTools(false)
@@ -63,9 +63,7 @@ public class Application {
 
 			var answer = chatClient.prompt("""
 					What skills do you have and how can you help me with my requests?
-					""")
-				.call()
-				.content();
+					""").call().content();
 
 			System.out.println("Supported Skills: " + answer);
 

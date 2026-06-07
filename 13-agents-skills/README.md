@@ -123,8 +123,8 @@ spring.ai.anthropic.chat.options.model=claude-sonnet-4-5-20250929
 
 **OpenAI**:
 ```properties
-spring.ai.openai-sdk.api-key=${OPENAI_API_KEY}
-spring.ai.openai-sdk.chat.options.model=gpt-5-mini-2025-08-07
+spring.ai.openai.api-key=${OPENAI_API_KEY}
+spring.ai.openai.chat.options.model=gpt-5-mini-2025-08-07
 ```
 
 **Google Gemini**:

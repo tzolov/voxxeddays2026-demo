@@ -2,7 +2,6 @@ package com.example.demo;
 
 import java.util.List;
 
-import org.springframework.ai.chat.client.AdvisorParams;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -26,15 +25,15 @@ public class DemoApplication {
 
 			// Desired ouput
 			record ActorsFilms(String actor, List<String> movies) {}
-
+			
 			ActorsFilms actorsFilms = chatClient.prompt()
-				// Uses LLM's native structured output capabilities if available
-				// or fall back to Spring AI's generic structured output support
-				// if not.
-				.advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT)
 				.user("Generate the filmography of 5 movies for Tom Hanks.")
 				.call()
-				.entity(ActorsFilms.class);
+				// Request the output to be deserialized into the ActorsFilms record
+				.entity(ActorsFilms.class,
+					// Uses LLM's native structured output capabilities if available
+					// or fall back to Spring AI's generic support
+					e -> e.useProviderStructuredOutput());
 
 			System.out.println("Answer: \n" + actorsFilms);
 
