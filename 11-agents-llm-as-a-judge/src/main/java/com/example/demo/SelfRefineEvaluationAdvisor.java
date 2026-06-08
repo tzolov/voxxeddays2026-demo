@@ -175,7 +175,9 @@ public class SelfRefineEvaluationAdvisor implements CallAdvisor, StreamAdvisor {
 		var evaluationPrompt = this.evaluationPromptTemplate
 			.render(Map.of("question", this.getPromptQuestion(request), "answer", this.getAssistantAnswer(response)));
 
-		return chatClient.prompt(evaluationPrompt).call().entity(EvaluationResponse.class);
+		return chatClient.prompt(evaluationPrompt)
+			.call()
+			.entity(EvaluationResponse.class, e -> e.useProviderStructuredOutput().validateSchema());
 	}
 
 	private String getPromptQuestion(ChatClientRequest chatClientRequest) {

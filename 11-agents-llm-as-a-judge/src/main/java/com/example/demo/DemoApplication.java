@@ -5,7 +5,6 @@ import java.util.Random;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.ollama.OllamaChatModel;
@@ -14,6 +13,7 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.Ordered;
 
 @SpringBootApplication
 public class DemoApplication {
@@ -31,23 +31,24 @@ public class DemoApplication {
 				.defaultTools(new MyTools())
 				
 				.defaultAdvisors(SelfRefineEvaluationAdvisor.builder()
-					.order(0)
+					.order(Ordered.HIGHEST_PRECEDENCE + 200)
 					.chatClientBuilder(ChatClient.builder(ollamaChatModel))
 					.maxRepeatAttempts(3)
 					.successRating(4)
 					.build())
 
-				// .defaultAdvisors(ToolCallAdvisor.builder()
+				// .defaultAdvisors(ToolCallingAdvisor.builder()
 				// 	.advisorOrder(1)
 				// 	.disableInternalConversationHistory()
 				// 	.build())
 
 				.defaultAdvisors(MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().build())
-					.order(2)
+					.order(Ordered.HIGHEST_PRECEDENCE + 400) // after tool calling advisor (+300)
+
 					.build())
 
 				.defaultAdvisors(MyLoggingAdvisor.builder()
-					.order(3)
+					.order(Ordered.HIGHEST_PRECEDENCE + 600)
 					.build())				
 
 				.build();
