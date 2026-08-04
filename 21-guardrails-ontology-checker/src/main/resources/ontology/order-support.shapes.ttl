@@ -1,0 +1,36 @@
+@prefix sup: <http://example.org/support#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------------------------------------------------------
+# SHACL shapes: structural / enumeration constraints, checked directly
+# against the candidate graph - no reasoning required. This is the
+# "semantic JSON Schema" layer: it plays the same role for the RDF graph
+# that org.springframework.ai.chat.client.advisor.StructuredOutputValidationAdvisor
+# plays for the raw JSON.
+# ---------------------------------------------------------------------------
+
+sup:OrderShape a sh:NodeShape ;
+    sh:targetClass sup:Order ;
+    sh:property [
+        sh:path sup:orderStatus ;
+        sh:in ( "paid" "shipped" "refunded" ) ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "Order status must be exactly one of: paid, shipped, refunded." ;
+    ] ;
+    sh:property [
+        sh:path sup:hasRefund ;
+        sh:maxCount 1 ;
+        sh:message "An order decision may not issue more than one refund." ;
+    ] .
+
+sup:RefundShape a sh:NodeShape ;
+    sh:targetClass sup:Refund ;
+    sh:property [
+        sh:path sup:refundAmount ;
+        sh:datatype xsd:decimal ;
+        sh:minCount 1 ;
+        sh:minExclusive 0 ;
+        sh:message "Refund amount must be a positive decimal number." ;
+    ] .

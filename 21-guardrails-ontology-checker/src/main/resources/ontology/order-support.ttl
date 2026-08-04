@@ -1,0 +1,55 @@
+@prefix sup:  <http://example.org/support#> .
+@prefix data: <http://example.org/support/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+
+# Two namespaces, on purpose: "sup:" (hash IRIs) names the TBox - classes and
+# properties - while "data:" (slash IRIs) names ABox individuals and the
+# order/refund instances the LLM's JSON output is lifted into. This mirrors
+# common Linked Data practice of separating schema terms from instance data,
+# and lets the JSON-LD @base (see order-support-context.json) resolve plain
+# ids like "rep-77" unambiguously via standard URI reference resolution.
+
+# ---------------------------------------------------------------------------
+# TBox: the domain ontology the LLM's structured output must respect.
+# ---------------------------------------------------------------------------
+
+sup:Person                a owl:Class .
+sup:Customer               a owl:Class ;
+                            rdfs:subClassOf sup:Person .
+sup:SupportRepresentative  a owl:Class ;
+                            rdfs:subClassOf sup:Person .
+
+# A customer can never also be a support representative - this is what lets
+# the OWL reasoner catch "refund paid to the support desk instead of the buyer".
+sup:Customer owl:disjointWith sup:SupportRepresentative .
+
+sup:Order  a owl:Class .
+sup:Refund a owl:Class .
+
+sup:hasRefund a owl:ObjectProperty ;
+    rdfs:domain sup:Order ;
+    rdfs:range  sup:Refund .
+
+# Range says: whoever a refund is paid to IS-A Customer. Combined with the
+# disjointWith axiom above, asserting a refund to a known SupportRepresentative
+# makes the graph logically inconsistent.
+sup:refundRecipient a owl:ObjectProperty ;
+    rdfs:domain sup:Refund ;
+    rdfs:range  sup:Customer .
+
+sup:refundAmount a owl:DatatypeProperty ;
+    rdfs:domain sup:Refund .
+
+sup:orderStatus a owl:DatatypeProperty ;
+    rdfs:domain sup:Order .
+
+# ---------------------------------------------------------------------------
+# ABox: background facts about known entities. In a real system this would
+# come from a customer/identity database, not be hand-authored.
+# ---------------------------------------------------------------------------
+
+data:cust-1001 a sup:Customer ;              rdfs:label "Jane Doe (customer)" .
+data:cust-2002 a sup:Customer ;              rdfs:label "Alex Kim (customer)" .
+data:rep-77    a sup:SupportRepresentative ; rdfs:label "Support Rep #77" .
+data:rep-88    a sup:SupportRepresentative ; rdfs:label "Support Rep #88" .

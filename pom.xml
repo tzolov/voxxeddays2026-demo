@@ -22,6 +22,7 @@
 		<spring-ai.version>2.0.1-SNAPSHOT</spring-ai.version>
 		<spring-ai-agent-utils.version>0.11.0-SNAPSHOT</spring-ai-agent-utils.version>
 		<spring-ai-session.version>0.6.0</spring-ai-session.version>
+		<jena.version>5.4.0</jena.version>
 	</properties>
 
 	<modules>
@@ -50,6 +51,7 @@
 		<module>18-a2a/airbnb-agent</module>
 		<module>19-auto-memory</module>
 		<module>20-memory-session</module>
+		<module>21-guardrails-ontology-checker</module>
 
 	</modules>
 

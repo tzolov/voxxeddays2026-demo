@@ -1,0 +1,18 @@
+{
+  "@context": {
+    "sup": "http://example.org/support#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "@base": "http://example.org/support/",
+    "orderId": "@id",
+    "status": "sup:orderStatus",
+    "refunds": {
+      "@id": "sup:hasRefund",
+      "@container": "@set",
+      "@context": {
+        "refundId": "@id",
+        "amount": { "@id": "sup:refundAmount", "@type": "xsd:decimal" },
+        "recipientId": { "@id": "sup:refundRecipient", "@type": "@id" }
+      }
+    }
+  }
+}
