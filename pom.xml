@@ -20,8 +20,8 @@
 	<properties>
 		<java.version>17</java.version>
 		<spring-ai.version>2.0.1</spring-ai.version>
-		<spring-ai-agent-utils.version>0.11.0</spring-ai-agent-utils.version>
-		<spring-ai-session.version>0.7.0</spring-ai-session.version>
+		<spring-ai-agent-utils.version>0.12.0</spring-ai-agent-utils.version>
+		<spring-ai-session.version>0.10.0</spring-ai-session.version>
 		<jena.version>5.4.0</jena.version>
 	</properties>
 
@@ -52,6 +52,7 @@
 		<module>19-auto-memory</module>
 		<module>20-memory-session</module>
 		<module>21-guardrails-ontology-checker</module>
+		<module>22-bank-support-agent</module>
 
 	</modules>
 
