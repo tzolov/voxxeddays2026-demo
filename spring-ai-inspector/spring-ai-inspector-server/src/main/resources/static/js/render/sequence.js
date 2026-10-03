@@ -1,0 +1,203 @@
+import { normRequest, normResponse } from '../providers.js';
+import { isJevWire } from './cards.js';
+import { NOUL_HOT, systemOneHighlights } from './wire.js';
+import { esc, fmtMs, oneLine } from '../util.js';
+
+// ---------------------------------------------------------------- sequence view
+// Flattens a run (plus remote calls linked to its tools) into lanes and messages ordered
+// by the server's global sequence number, then draws them as an SVG sequence diagram.
+export const LANE_RANK = { app: 0, adv: 1, model: 2, jev: 3, tool: 4, vector: 5 };
+
+export function buildSequence(run) {
+	const lanes = new Map(); // key -> {key, label, sub, group, kind}
+	const groups = new Map(); // runId -> label
+	const msgs = []; // {seq, ts, from, to, label, kind, ret, path, note}
+	const acts = []; // activation bars {lane, from: seq, to: seq}
+	const lane = (r, kind, id, label, sub) => {
+		const key = `${r.id}|${kind}|${id}`;
+		if (!lanes.has(key)) lanes.set(key, { key, label, sub, group: r.id, kind });
+		if (!groups.has(r.id)) groups.set(r.id, r === run ? null : r.app);
+		return key;
+	};
+	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
+
+	function wireLane(r, w) {
+		const req = normRequest(w);
+		const model = req?.params?.model || w.req.provider;
+		return isJevWire({ kind: 'wire', ref: w }) ? lane(r, 'jev', '', 'Jev', 'TypeSafe systemOne') : lane(r, 'model', model, model, w.req.provider);
+	}
+
+	function wireReturn(w) {
+		if (!w.resp) return '…';
+		if (w.resp.error || w.resp.status >= 400) return `HTTP ${w.resp.status}`;
+		const r = normResponse(w);
+		if (r?.answers) return systemOneHighlights(r).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'answers';
+		const tools = (r?.blocks || []).filter((b) => b.type === 'tool_use').map((b) => b.name);
+		return `${tools.length ? 'tool_use ' + tools.join(', ') : (r?.stop || 'response')} · ${fmtMs(w.resp.durationMs)}`;
+	}
+
+	function walkItems(r, call, items, adv, path, nest = 0) {
+		const tools = items.filter((i) => i.kind === 'tool').map((i) => i.ref);
+		for (let i = 0; i < items.length;) {
+			let j = i;
+			while (j < items.length && isJevWire(items[j])) j++;
+			if (j - i >= 3) { // fold runs of Jev checks into one exchange
+				const group = items.slice(i, j).map((it) => it.ref);
+				const to = lane(r, 'jev', '', 'Jev', 'TypeSafe systemOne');
+				const last = group[group.length - 1];
+				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} Jev checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
+				if (last.resp) msgs.push({ seq: last.resp.seq, ts: last.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
+					label: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
+				i = j;
+				continue;
+			}
+			const it = items[i++];
+			if (it.kind === 'wire') {
+				const w = it.ref; const to = wireLane(r, w); const req = normRequest(w);
+				const kind = to.includes('|jev|') ? 'jev' : 'model';
+				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions` : `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
+				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: adv, to, label, kind, path: [...path, 'wire:' + w.id] });
+				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: adv, ret: true, kind, label: wireReturn(w), path: [...path, 'wire:' + w.id] });
+			}
+			else if (it.kind === 'tool') {
+				const t = it.ref; const to = lane(r, 'tool', '', 'Tools', '');
+				msgs.push({ seq: t.start.seq, ts: t.start.ts, from: adv, to, kind: 'tool', label: `${t.start.name}(${oneLine(t.start.arguments, 40)})`, path: [...path, 'tool:' + t.id] });
+				for (const rc of t.remoteCalls || []) walkCall(rc.run, rc, to, [...path, 'tool:' + t.id], 0);
+				if (t.end) {
+					msgs.push({ seq: t.end.seq, ts: t.end.ts, from: to, to: adv, ret: true, kind: 'tool', path: [...path, 'tool:' + t.id],
+						label: `${t.end.error ? '⚠ ' + oneLine(t.end.error, 40) : oneLine(t.end.result, 40)} · ${fmtMs(t.end.durationMs)}` });
+					acts.push({ lane: to, from: t.start.seq, to: t.end.seq, nest: 0 });
+				}
+			}
+			else if (it.kind === 'call') {
+				const nested = it.ref;
+				// A nested call made while a tool runs is a sub-agent called by that tool;
+				// otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
+				const byTool = tools.find((t) => t.start.seq < nested.req.seq && (!t.end || t.end.seq > nested.req.seq));
+				if (byTool) walkCall(r, nested, lane(r, 'tool', '', 'Tools', ''), path, 0, byTool.start.name);
+				else walkCall(r, nested, adv, path, nest + 1, null, adv);
+			}
+			else if (it.kind === 'ingest') {
+				const to = lane(r, 'vector', '', 'Vector store', it.ref.store);
+				msgs.push({ seq: it.ref.seq, ts: it.ref.ts, from: adv, to, kind: 'vector', label: `ingest ${it.ref.count} chunks · ${fmtMs(it.ref.durationMs)}`, path });
+			}
+		}
+		for (const sr of call ? call.searches : []) {
+			const to = lane(r, 'vector', '', 'Vector store', sr.store);
+			msgs.push({ seq: sr.seq, ts: sr.ts, from: adv, to, kind: 'vector', label: `🔎 ${oneLine(sr.query, 40)}`, path });
+			msgs.push({ seq: sr.seq + 0.5, ts: sr.ts, from: to, to: adv, ret: true, kind: 'vector', path,
+				label: `${sr.results.length} hits${sr.results.length ? ' · best ' + Math.max(...sr.results.map((x) => x.score || 0)).toFixed(2) : ''} · ${fmtMs(sr.durationMs)}` });
+		}
+	}
+
+	// nest: depth of self-nesting on the same lane (e.g. RAG rewrite inside the RAG advisor);
+	// viaTool: an in-process sub-agent started by that tool gets its own lane.
+	function walkCall(r, call, from, parentPath, nest = 0, viaTool = null, sameLane = null) {
+		const adv = sameLane || (viaTool && r === run
+			? lane(r, 'adv', 'sub:' + viaTool, 'Sub-agent', `via ${viaTool}`)
+			: lane(r, 'adv', '', r === run ? 'Advisors' : r.app.split(' · ')[0], r === run ? 'ChatClient' : 'remote agent'));
+		const path = [...parentPath, 'call:' + call.id];
+		const user = [...(call.req.messages || [])].reverse().find((m) => m.role === 'user');
+		const remote = r !== run;
+		msgs.push({ seq: call.req.seq, ts: call.req.ts, from, to: adv, kind: remote ? 'remote' : 'call', path,
+			label: `${remote ? 'A2A · ' : ''}#${call.num} “${oneLine(user?.text || '', 44)}”` });
+		walkItems(r, call, call.items, adv, path, nest);
+		const fresh = call.memory.after ? countWritten(call) : 0;
+		if (fresh) msgs.push({ seq: call.memory.afterSeq, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path });
+		if (call.resp) {
+			const answer = call.resp.error ? '⚠ ' + call.resp.error : (call.resp.generations || []).map((g) => g.text).join(' ');
+			msgs.push({ seq: call.resp.seq, ts: call.resp.ts, from: adv, to: from, ret: true, kind: remote ? 'remote' : 'call', path, label: oneLine(answer, 48) });
+			acts.push({ lane: adv, from: call.req.seq, to: call.resp.seq, nest });
+		}
+		else acts.push({ lane: adv, from: call.req.seq, to: Infinity, nest });
+	}
+
+	for (const it of run.items) {
+		if (it.kind === 'call') walkCall(run, it.ref, app, []);
+	}
+	walkItems(run, null, run.items.filter((i) => i.kind !== 'call'), app, []);
+
+	msgs.sort((a, b) => a.seq - b.seq);
+	// Lanes: this run's group first, then remote groups; inside a group by kind.
+	const groupOrder = [...groups.keys()];
+	const laneList = [...lanes.values()].sort((a, b) => groupOrder.indexOf(a.group) - groupOrder.indexOf(b.group)
+		|| LANE_RANK[a.kind] - LANE_RANK[b.kind]);
+	return { lanes: laneList, groups, msgs, acts };
+}
+
+export function countWritten(call) {
+	let n = 0;
+	for (const store of call.memory.after || []) {
+		const before = (call.memory.before || []).find((b) => b.kind === store.kind && b.id === store.id);
+		if (store.kind === 'files') {
+			const prev = new Map((before?.items || []).map((f) => [f.name, f.content]));
+			n += store.items.filter((f) => prev.get(f.name) !== f.content).length;
+		}
+		else n += Math.max(0, store.items.length - (before?.items.length || 0));
+	}
+	return n;
+}
+
+export function renderSequence(run, scaled) {
+	const { lanes, groups, msgs, acts } = buildSequence(run);
+	if (!msgs.length) return '';
+	const LANE_W = 190; const LEFT = 20; const HEAD = 58; const ROW = 30;
+	const x = new Map(lanes.map((l, i) => [l.key, LEFT + i * LANE_W + LANE_W / 2]));
+	// Row positions: uniform, or with extra space proportional to elapsed time (capped).
+	const ys = []; let y = HEAD + 24;
+	msgs.forEach((m, i) => {
+		if (i > 0) y += ROW + (scaled ? Math.min(180, Math.max(0, (m.ts - msgs[i - 1].ts) / 25)) : 0);
+		ys.push(y);
+	});
+	const ySeq = (seq) => { // y of the first message at or after seq
+		const i = msgs.findIndex((m) => m.seq >= seq);
+		return i < 0 ? ys[ys.length - 1] + ROW / 2 : ys[i];
+	};
+	const height = ys[ys.length - 1] + ROW + 10;
+	const width = LEFT * 2 + lanes.length * LANE_W;
+	let svg = '';
+	// remote groups
+	for (const [gid, label] of groups) {
+		if (!label) continue;
+		const gl = lanes.filter((l) => l.group === gid);
+		const x0 = x.get(gl[0].key) - LANE_W / 2 + 6; const x1 = x.get(gl[gl.length - 1].key) + LANE_W / 2 - 6;
+		svg += `<rect class="group" x="${x0}" y="4" width="${x1 - x0}" height="${height - 8}" rx="10"/><text class="group-label" x="${x0 + 8}" y="16">${esc(label)} · linked by timing</text>`;
+	}
+	// lane heads and lifelines
+	for (const l of lanes) {
+		const cx = x.get(l.key);
+		svg += `<line class="lifeline" x1="${cx}" y1="${HEAD}" x2="${cx}" y2="${height}"/>
+			<g class="lane-head"><rect x="${cx - LANE_W / 2 + 12}" y="20" width="${LANE_W - 24}" height="36" rx="6"/>
+			<text x="${cx}" y="${l.sub ? 35 : 42}" text-anchor="middle">${esc(oneLine(l.label, 24))}</text>
+			${l.sub ? `<text class="sub" x="${cx}" y="49" text-anchor="middle">${esc(oneLine(l.sub, 28))}</text>` : ''}</g>`;
+	}
+	// activation bars
+	for (const a of acts) {
+		const y0 = ySeq(a.from) - 4; const y1 = a.to === Infinity ? height - 6 : ySeq(a.to) + 4;
+		svg += `<rect class="act" x="${x.get(a.lane) - 5 + (a.nest || 0) * 6}" y="${y0}" width="10" height="${Math.max(8, y1 - y0)}" rx="2"/>`;
+	}
+	// messages
+	msgs.forEach((m, i) => {
+		const yy = ys[i]; const x1 = x.get(m.from); const x2 = x.get(m.to);
+		const goto = esc(JSON.stringify(m.path));
+		if (m.note) {
+			svg += `<g class="msg note" data-goto="${goto}"><rect x="${x1 + 10}" y="${yy - 11}" width="${m.note.length * 7 + 14}" height="20" rx="4"/><text x="${x1 + 17}" y="${yy + 3}">${esc(m.note)}</text></g>`;
+			return;
+		}
+		const cls = `msg ${m.ret ? 'ret' : ''}`;
+		const k = `k-${m.kind}`;
+		if (x1 === x2) { // self-call
+			svg += `<g class="${cls}" data-goto="${goto}"><path class="${k}" d="M${x1 + 5},${yy - 6} h28 v12 h-28" marker-end="url(#ah-${m.kind})"/>
+				<text x="${x1 + 40}" y="${yy + 4}">${esc(oneLine(m.label, 46))}</text></g>`;
+			return;
+		}
+		const dir = x2 > x1 ? 1 : -1;
+		const maxChars = Math.max(12, Math.floor((Math.abs(x2 - x1) - 16) / 6.4));
+		svg += `<g class="${cls}" data-goto="${goto}"><line class="${k}" x1="${x1 + dir * 5}" y1="${yy}" x2="${x2 - dir * 7}" y2="${yy}" marker-end="url(#ah-${m.kind})"/>
+			<text x="${(x1 + x2) / 2}" y="${yy - 5}" text-anchor="middle">${esc(oneLine(m.label, maxChars))}</text></g>`;
+	});
+	const colors = { call: '--text', model: '--assistant', tool: '--tool', jev: '--system', vector: '--user', remote: '--accent' };
+	const defs = `<defs>${Object.entries(colors).map(([kd, c]) => `<marker id="ah-${kd}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(${c});stroke:none"/></marker>`).join('')}</defs>`;
+	return `<div class="seq-wrap"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${defs}${svg}</svg></div>
+		<div class="s1-crit" style="margin-top:.4rem">Click an arrow to open it in the Cards view. Dashed arrows are returns.</div>`;
+}

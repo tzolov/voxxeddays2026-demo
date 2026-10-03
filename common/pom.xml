@@ -17,5 +17,10 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-client-chat</artifactId>
 		</dependency>
+		<!-- Spring AI Inspector instrumentation: every demo reports to a running inspector, transitively -->
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-inspector-starter</artifactId>
+		</dependency>
 	</dependencies>
 </project>

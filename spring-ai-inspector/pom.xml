@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!-- Self-contained on purpose: not a child of the demo root pom, which adds
+	     spring-boot-starter-web to every module. The starter must stay lightweight. -->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.7</version>
+		<relativePath />
+	</parent>
+
+	<groupId>org.springaicommunity</groupId>
+	<artifactId>spring-ai-inspector-parent</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>Spring AI Inspector (parent)</name>
+	<description>Live inspector for Spring AI applications: what the app sent, what the advisors changed, and the raw model traffic</description>
+
+	<properties>
+		<java.version>17</java.version>
+		<spring-ai.version>2.0.1</spring-ai.version>
+	</properties>
+
+	<modules>
+		<module>spring-ai-inspector-starter</module>
+		<module>spring-ai-inspector-server</module>
+	</modules>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+</project>

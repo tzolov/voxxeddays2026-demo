@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spring AI Inspector</title>
+<link rel="stylesheet" href="css/inspector.css">
+</head>
+<body>
+<div class="topbar">
+	<div class="brand"><span class="dot" id="conn"></span>Spring AI Inspector</div>
+	<div class="spacer"></div>
+	<button class="btn" id="follow" title="Jump to each new run automatically">Follow new runs</button>
+	<div class="btn-group">
+		<button class="btn" data-scale="-1" title="Smaller text">A−</button>
+		<button class="btn" data-scale="1" title="Larger text">A+</button>
+	</div>
+	<button class="btn" id="theme" title="Toggle light / dark">◐</button>
+	<button class="btn" id="import" title="Load runs saved with Export">Import</button>
+	<input type="file" id="import-file" accept=".json,application/json" multiple hidden>
+	<button class="btn" id="clear" title="Remove all captured runs">Clear</button>
+</div>
+<div class="replay" id="replay" hidden></div>
+<div class="layout">
+	<aside class="sidebar"><h2>Runs</h2><div id="runs"></div></aside>
+	<main class="main" id="main"></main>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

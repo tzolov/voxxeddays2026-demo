@@ -1,0 +1,127 @@
+package org.springaicommunity.inspector;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+import org.springframework.ai.util.JsonHelper;
+
+/**
+ * Posts events to the Spring AI Inspector.
+ *
+ * <p>The instrumentation must never break or noticeably slow the application it observes:
+ * <ul>
+ * <li>Events are built lazily inside a guard: a failure while building one (an odd
+ * message, a throwing {@code toString()}) drops that event, never the application's
+ * call.</li>
+ * <li>{@link #send} is synchronous (localhost, ~1ms) so the inspector sees advisor events
+ * and wire calls in their real order. {@link #sendAsync} posts from one background thread,
+ * in order, for callers that must not block (e.g. Reactor threads).</li>
+ * <li>After a failed post, publishing pauses for {@link #BACKOFF} and then resumes, so a
+ * stopped inspector costs at most one short timeout per pause and a restarted one is
+ * picked up again.</li>
+ * </ul>
+ */
+public class InspectorClient {
+
+	static final Duration BACKOFF = Duration.ofSeconds(5);
+
+	private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(500)).build();
+
+	private final ExecutorService asyncSender = Executors.newSingleThreadExecutor(r -> {
+		Thread thread = new Thread(r, "spring-ai-inspector-sender");
+		thread.setDaemon(true);
+		return thread;
+	});
+
+	private final JsonHelper json = new JsonHelper();
+
+	private final URI eventsUri;
+
+	private final String runId;
+
+	private volatile long pausedUntil;
+
+	/** Delivers a serialized event; HTTP POST to the inspector, replaceable in tests. */
+	private final Consumer<String> transport;
+
+	public InspectorClient(String url, String runId) {
+		this.eventsUri = URI.create(url + "/api/events");
+		this.runId = runId;
+		this.transport = this::post;
+	}
+
+	InspectorClient(String runId, Consumer<String> transport) {
+		this.eventsUri = null;
+		this.runId = runId;
+		this.transport = transport;
+	}
+
+	/** Builds and posts an event on the calling thread. Never throws. */
+	public void send(String type, Supplier<Map<String, Object>> payload) {
+		String body = build(type, payload);
+		if (body != null) {
+			this.transport.accept(body);
+		}
+	}
+
+	/** Like {@link #send(String, Supplier)}, but posts from a background thread, in order. */
+	public void sendAsync(String type, Supplier<Map<String, Object>> payload) {
+		String body = build(type, payload);
+		if (body != null) {
+			this.asyncSender.execute(() -> this.transport.accept(body));
+		}
+	}
+
+	public void send(String type, Map<String, Object> payload) {
+		send(type, () -> payload);
+	}
+
+	private String build(String type, Supplier<Map<String, Object>> payload) {
+		if (System.currentTimeMillis() < this.pausedUntil) {
+			return null;
+		}
+		try {
+			Map<String, Object> event = new LinkedHashMap<>();
+			event.put("type", type);
+			event.put("runId", this.runId);
+			event.put("ts", System.currentTimeMillis());
+			event.putAll(payload.get());
+			return this.json.toJson(event);
+		}
+		catch (RuntimeException | LinkageError ex) {
+			return null; // drop the event, never the application's call
+		}
+	}
+
+	private void post(String body) {
+		if (System.currentTimeMillis() < this.pausedUntil) {
+			return;
+		}
+		try {
+			HttpRequest request = HttpRequest.newBuilder(this.eventsUri)
+				.timeout(Duration.ofSeconds(1))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(body))
+				.build();
+			this.httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+		catch (Exception ex) {
+			this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
+			System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
+					+ BACKOFF.toSeconds() + "s");
+		}
+	}
+
+}
