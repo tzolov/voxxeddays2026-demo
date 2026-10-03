@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { state } from '../../main/resources/static/js/state.js';
 import { handle } from '../../main/resources/static/js/model.js';
 import { ADAPTERS, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
-import { renderCall, renderItems } from '../../main/resources/static/js/render/cards.js';
+import { diffTools, renderCall, renderItems } from '../../main/resources/static/js/render/cards.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
@@ -69,6 +69,25 @@ test('tools: tool runs sit between the round-trips that requested and consumed t
 	assert.deepEqual(call.items.map((i) => i.kind), ['wire', 'tool', 'tool', 'wire']);
 	assert.ok(call.wires.every((w) => usageOf(w).input > 0));
 	assert.match(renderCall(call, true), /getTemperature/);
+});
+
+test('tools that pass through the advisors stay visible after them', () => {
+	const [run] = load('tools');
+	const html = renderCall(topCalls(run)[0], true);
+	const afterAdvisors = html.slice(html.indexOf('After the advisors'), html.indexOf('On the wire'));
+
+	assert.match(afterAdvisors, /unchanged/);
+	assert.match(afterAdvisors, /⚙ getTemperature/);
+});
+
+test('tool diff marks tools added and removed by advisors', () => {
+	const diff = diffTools([{ name: 'search' }, { name: 'weather' }], [{ name: 'weather' }, { name: 'toolSearch' }]);
+
+	assert.equal(diff.added, 1);
+	assert.equal(diff.removed, 1);
+	assert.match(diff.html, /chip added[^>]*>\+ ⚙ toolSearch/);
+	assert.match(diff.html, /chip removed[^>]*>− ⚙ search/);
+	assert.match(diff.html, /chip "[^>]*>⚙ weather/);
 });
 
 test('A2A: the remote agent call is linked under the caller\'s Task tool', () => {

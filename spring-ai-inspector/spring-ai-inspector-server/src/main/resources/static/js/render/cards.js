@@ -114,11 +114,12 @@ export function renderCall(call, isLatest) {
 	let hint3 = '';
 	if (first) {
 		const { out, removed } = diffMessages(appMsgs, first.req.messages || []);
-		const added = out.filter((x) => x.mark === 'added').length;
-		hint3 = added || removed.length ? `${added ? `+${added} added` : ''}${added && removed.length ? ', ' : ''}${removed.length ? `−${removed.length} removed` : ''}` : 'unchanged';
+		const tools = diffTools(appTools, first.req.options?.tools || []);
+		const added = out.filter((x) => x.mark === 'added').length + tools.added;
+		const dropped = removed.length + tools.removed;
+		hint3 = added || dropped ? `${added ? `+${added} added` : ''}${added && dropped ? ', ' : ''}${dropped ? `−${dropped} removed` : ''}` : 'unchanged';
 		s3 = `<div class="msgs">${removed.map((m) => renderSpringMessage(m, 'removed')).join('')}${out.map((x) => renderSpringMessage(x.m, x.mark)).join('')}</div>`;
-		const extraTools = (first.req.options?.tools || []).filter((t) => !appTools.some((a) => a.name === t.name));
-		if (extraTools.length) s3 += `<div class="chain" style="margin-top:.45rem"><span class="tag added">+ tools</span>${extraTools.map((t) => `<span class="chip" title="${esc(t.description)}">⚙ ${esc(t.name)}</span>`).join('')}</div>`;
+		s3 += tools.html;
 		if (call.modelCalls.length > 1) s3 += `<div class="notice info" style="margin-top:.45rem">The advisor chain called the model ${call.modelCalls.length} times (e.g. a tool-calling loop or a retrying advisor).</div>`;
 	}
 	else if (call.resp) {
@@ -155,6 +156,21 @@ export function renderCall(call, isLatest) {
 	const steps = parts.map(([title, hint, content], i) => step(i + 1, title, hint, content)).join('');
 
 	return `<details class="call ${call.parent ? 'nested' : ''}" data-key="${esc(key)}" ${isOpen(key, isLatest || !call.resp) ? 'open' : ''}><summary>${summary}</summary><div class="steps">${steps}</div></details>`;
+}
+
+// The tools the model receives, against the ones the app passed: unchanged tools are
+// listed too, so a tool that simply passes through the advisors doesn't look dropped.
+export function diffTools(appTools, modelTools) {
+	const appNames = new Set(appTools.map((t) => t.name));
+	const modelNames = new Set(modelTools.map((t) => t.name));
+	const chip = (t, mark) => `<span class="chip ${mark}" title="${esc(t.description)}">${mark === 'added' ? '+ ' : mark === 'removed' ? '− ' : ''}⚙ ${esc(t.name)}</span>`;
+	const chips = [...modelTools.map((t) => chip(t, appNames.has(t.name) ? '' : 'added')),
+		...appTools.filter((t) => !modelNames.has(t.name)).map((t) => chip(t, 'removed'))];
+	return {
+		added: modelTools.filter((t) => !appNames.has(t.name)).length,
+		removed: appTools.filter((t) => !modelNames.has(t.name)).length,
+		html: chips.length ? `<div class="chain" style="margin-top:.45rem">${chips.join('')}</div>` : '',
+	};
 }
 
 export function wireHint(call) {

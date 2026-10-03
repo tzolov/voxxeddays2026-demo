@@ -186,6 +186,8 @@ details[open] > summary .chev { transform: rotate(90deg); }
 .chip { font-family: var(--mono); font-size: .78rem; border: 1px solid var(--line); background: var(--panel-2); border-radius: .4rem; padding: .15rem .5rem; }
 .chip .ord { color: var(--muted); font-size: .7rem; margin-left: .3rem; }
 .chip.app { border-color: var(--user); color: var(--user); }
+.chip.added { border-color: var(--added); color: var(--added); background: var(--added-soft); }
+.chip.removed { border-color: var(--removed); color: var(--removed); background: var(--removed-soft); text-decoration: line-through; }
 .chip.model { border-color: var(--assistant); color: var(--assistant); }
 .arrow { color: var(--muted); }
 .notice { border-radius: .45rem; padding: .5rem .7rem; font-size: .9rem; }
