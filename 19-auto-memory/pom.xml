@@ -10,7 +10,7 @@
 	</parent>
 	<artifactId>19-auto-memory</artifactId>
 	<name>19 - Auto Memory</name>
-	<description>Spring AI: chat memory with MessageWindowChatMemory</description>
+	<description>Spring AI: long-term file memory with AutoMemoryTools and AutoDream consolidation</description>
 
 	<dependencies>
 		<dependency>
@@ -25,6 +25,11 @@
 			<groupId>org.springaicommunity</groupId>
 			<artifactId>spring-ai-agent-utils</artifactId>
 			<version>${spring-ai-agent-utils.version}</version>
+		</dependency>
+		<!-- Short-term memory and cross-session recall for the Dreamer -->
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-session</artifactId>
 		</dependency>
 
 	</dependencies>
