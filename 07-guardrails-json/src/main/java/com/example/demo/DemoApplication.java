@@ -3,7 +3,6 @@ package com.example.demo;
 import java.util.List;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.ChatClientAttributes;
 import org.springframework.ai.chat.client.advisor.StructuredOutputValidationAdvisor;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;

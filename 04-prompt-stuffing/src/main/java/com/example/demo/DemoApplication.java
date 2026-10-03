@@ -42,7 +42,7 @@ public class DemoApplication {
 								List only the sessions with more than 1 speakers""")
 							.param("additionalContext", asText(conferenceAgenda)))
 				.call()
-				.entity(new ParameterizedTypeReference<List<Track>>() {});
+				.entity(new ParameterizedTypeReference<List<Track>>() {}, e -> e.useProviderStructuredOutput());
 			
 			System.out.println(new JsonMapper().writerWithDefaultPrettyPrinter().writeValueAsString(talks));
 

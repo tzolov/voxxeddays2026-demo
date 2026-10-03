@@ -14,6 +14,7 @@ import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
 import { renderWire } from '../../main/resources/static/js/render/wire.js';
+import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url)));
 
@@ -191,4 +192,42 @@ test('event data is escaped wherever it is rendered', () => {
 	for (const html of [renderItems(run.items, null), renderSequence(run, true)]) {
 		assert.ok(!html.includes('<img'), 'no raw markup from event data');
 	}
+});
+
+// ---------------------------------------------------------------- tokens by model
+
+test('tokens by model: the remote A2A agent is included and tagged', () => {
+	const runs = load('a2a');
+	const caller = runOf(runs, 'subagent-a2a-demo');
+	const { rows, total, hasRemote } = tokensByModel(caller);
+
+	assert.ok(hasRemote);
+	const remote = rows.filter((r) => r.remote);
+	assert.ok(remote.length >= 1 && remote.every((r) => r.remote === 'airbnb-agent' && r.provider === 'openai'));
+	assert.ok(rows.some((r) => !r.remote && r.provider === 'anthropic'));
+	assert.equal(total.input, rows.reduce((t, r) => t + r.input, 0));
+	assert.match(renderTokenPanel(caller), /remote · airbnb-agent/);
+	assert.match(renderTokenPanel(caller), /incl\. remote agents/);
+});
+
+test('tokens by model: Jev and the chat model are counted separately, every round-trip once', () => {
+	const [run] = load('modular-rag');
+	const { rows, total } = tokensByModel(run);
+
+	assert.deepEqual(rows.map((r) => r.provider).sort(), ['anthropic', 'typesafe']);
+	assert.equal(total.calls, run.wireList.length);
+});
+
+test('usage is normalized: input counts all prompt tokens, cache and reasoning are subsets', () => {
+	const anthropic = normResponse(wire('anthropic', '/v1/messages', { model: 'claude', messages: [] },
+		JSON.stringify({ content: [], stop_reason: 'end_turn',
+			usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: 3 } })));
+	assert.equal(anthropic.usage.input, 115);
+	assert.equal(anthropic.usage.cacheRead, 100);
+
+	const openai = normResponse(wire('openai', '/v1/chat/completions', { model: 'gpt', messages: [] },
+		JSON.stringify({ choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }],
+			usage: { prompt_tokens: 120, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 100 },
+				completion_tokens_details: { reasoning_tokens: 32 } } })));
+	assert.deepEqual([openai.usage.input, openai.usage.cacheRead, openai.usage.reasoning], [120, 100, 32]);
 });

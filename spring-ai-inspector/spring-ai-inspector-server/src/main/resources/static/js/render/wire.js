@@ -1,5 +1,6 @@
 import { adapterOf, normRequest, normResponse } from '../providers.js';
 import { state } from '../state.js';
+import { wireModelKey } from './tokens.js';
 import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson } from '../util.js';
 
 // ---------------------------------------------------------------- wire rendering
@@ -205,5 +206,6 @@ export function renderWire(wire) {
 		<div><div class="col-title">request headers</div>${renderHeaders(wire.req.headers)}</div>
 		<div><div class="col-title">response headers</div>${renderHeaders(wire.resp?.headers)}</div></div></div>`;
 
-	return `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
+	const hl = state.highlight && state.highlight === wireModelKey(wire) ? ' hl' : '';
+	return `<details class="wire${hl}" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
 }

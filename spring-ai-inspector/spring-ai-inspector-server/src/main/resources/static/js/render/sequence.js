@@ -1,4 +1,5 @@
-import { normRequest, normResponse } from '../providers.js';
+import { normRequest, normResponse, usageOf } from '../providers.js';
+import { fmtCompact } from './tokens.js';
 import { isJevWire } from './cards.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine } from '../util.js';
@@ -20,6 +21,12 @@ export function buildSequence(run) {
 		return key;
 	};
 	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
+	// Token totals per model/Jev lane, shown under the lane head.
+	const addTokens = (laneKey, w) => {
+		const u = usageOf(w); const l = lanes.get(laneKey);
+		if (!u || !l) return;
+		l.tokens = { input: (l.tokens?.input || 0) + (u.input || 0), output: (l.tokens?.output || 0) + (u.output || 0) };
+	};
 
 	function wireLane(r, w) {
 		const req = normRequest(w);
@@ -45,6 +52,7 @@ export function buildSequence(run) {
 				const group = items.slice(i, j).map((it) => it.ref);
 				const to = lane(r, 'jev', '', 'Jev', 'TypeSafe systemOne');
 				const last = group[group.length - 1];
+				group.forEach((w) => addTokens(to, w));
 				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} Jev checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
 				if (last.resp) msgs.push({ seq: last.resp.seq, ts: last.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
 					label: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
@@ -54,6 +62,7 @@ export function buildSequence(run) {
 			const it = items[i++];
 			if (it.kind === 'wire') {
 				const w = it.ref; const to = wireLane(r, w); const req = normRequest(w);
+				addTokens(to, w);
 				const kind = to.includes('|jev|') ? 'jev' : 'model';
 				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions` : `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
 				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: adv, to, label, kind, path: [...path, 'wire:' + w.id] });
@@ -141,7 +150,8 @@ export function countWritten(call) {
 export function renderSequence(run, scaled) {
 	const { lanes, groups, msgs, acts } = buildSequence(run);
 	if (!msgs.length) return '';
-	const LANE_W = 190; const LEFT = 20; const HEAD = 58; const ROW = 30;
+	const withTokens = lanes.some((l) => l.tokens);
+	const LANE_W = 190; const LEFT = 20; const HEAD = withTokens ? 72 : 58; const ROW = 30;
 	const x = new Map(lanes.map((l, i) => [l.key, LEFT + i * LANE_W + LANE_W / 2]));
 	// Row positions: uniform, or with extra space proportional to elapsed time (capped).
 	const ys = []; let y = HEAD + 24;
@@ -169,7 +179,8 @@ export function renderSequence(run, scaled) {
 		svg += `<line class="lifeline" x1="${cx}" y1="${HEAD}" x2="${cx}" y2="${height}"/>
 			<g class="lane-head"><rect x="${cx - LANE_W / 2 + 12}" y="20" width="${LANE_W - 24}" height="36" rx="6"/>
 			<text x="${cx}" y="${l.sub ? 35 : 42}" text-anchor="middle">${esc(oneLine(l.label, 24))}</text>
-			${l.sub ? `<text class="sub" x="${cx}" y="49" text-anchor="middle">${esc(oneLine(l.sub, 28))}</text>` : ''}</g>`;
+			${l.sub ? `<text class="sub" x="${cx}" y="49" text-anchor="middle">${esc(oneLine(l.sub, 28))}</text>` : ''}
+			${l.tokens ? `<text class="sub" x="${cx}" y="68" text-anchor="middle">${fmtCompact(l.tokens.input)} in · ${fmtCompact(l.tokens.output)} out</text>` : ''}</g>`;
 	}
 	// activation bars
 	for (const a of acts) {

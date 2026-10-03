@@ -61,6 +61,18 @@
 			<artifactId>spring-ai-vector-store</artifactId>
 		</dependency>
 
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-starter-typesafe</artifactId>
+			<version>${spring-ai-typesafe.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>typesafe-spring-ai</artifactId>
+			<version>${spring-ai-typesafe.version}</version>
+		</dependency>
+
 
 	</dependencies>
 

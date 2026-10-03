@@ -38,9 +38,12 @@ public class DemoApplication {
 			vectorStore.add(				
 				TokenTextSplitter.builder().build().split(
 					new PagePdfDocumentReader(hurricaneDocs).read()));
-
+					
 			ChatClient chatClient = chatClientBuilder
-				.defaultAdvisors(MyLoggingAdvisor.builder().build())
+				.defaultAdvisors(
+					MyLoggingAdvisor.builder()
+						.order(+1) // after the QuestionAnswerAdvisor
+						.build())
 				.build();
 
 

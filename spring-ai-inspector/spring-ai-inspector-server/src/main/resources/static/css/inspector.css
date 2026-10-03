@@ -254,3 +254,29 @@ details.fold[open] > summary::before { content: "▾ "; }
 	.cols { grid-template-columns: 1fr; }
 	.main { padding: 1rem; }
 }
+
+/* ---------- tokens by model ---------- */
+.tokens { margin: -.25rem 0 1rem; }
+.tok-grid { display: flex; flex-direction: column; gap: .15rem; margin-top: .4rem; }
+.tok-row { display: grid; grid-template-columns: minmax(13rem, 1.3fr) minmax(8rem, 2fr) 5.5rem 5.5rem minmax(0, 1.3fr) 3rem;
+	gap: .75rem; align-items: center; width: 100%; text-align: left; font: inherit; font-size: .85rem; color: inherit;
+	background: none; border: 1px solid transparent; border-radius: .45rem; padding: .3rem .5rem; cursor: pointer; }
+.tok-row:hover { background: var(--panel-2); }
+.tok-row.on { border-color: var(--accent); background: var(--accent-soft); }
+.tok-head-row { cursor: default; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tok-head-row:hover { background: none; }
+.tok-name { display: flex; gap: .35rem; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; }
+.tok-bar-wrap { height: .75rem; }
+.tok-bar { display: flex; height: 100%; min-width: 3px; border-radius: 999px; overflow: hidden; }
+.t-in { position: relative; display: block; background: var(--user); }
+.t-out { display: block; background: var(--assistant); opacity: .8; }
+.t-cache { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(45deg, rgba(255, 255, 255, .6) 0 3px, transparent 3px 6px); }
+.tok-num { text-align: right; font-variant-numeric: tabular-nums; }
+.tok-extra { color: var(--muted); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-key { display: inline-block; position: relative; width: .8rem; height: .6rem; border-radius: 2px; margin: 0 .2rem 0 .45rem; vertical-align: middle; }
+.t-key.t-cache { position: relative; inset: auto; background: repeating-linear-gradient(45deg, rgba(255, 255, 255, .6) 0 3px, transparent 3px 6px), var(--user); }
+.wire.hl { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 900px) {
+	.tok-row { grid-template-columns: minmax(0, 1fr) 4.5rem 4.5rem; }
+	.tok-row > :nth-child(2), .tok-row > :nth-child(5), .tok-row > :nth-child(6) { display: none; }
+}

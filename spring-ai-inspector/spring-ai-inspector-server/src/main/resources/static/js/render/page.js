@@ -1,6 +1,7 @@
 import { usageOf } from '../providers.js';
 import { renderItems } from './cards.js';
 import { renderSequence } from './sequence.js';
+import { renderTokenPanel } from './tokens.js';
 import { replay } from '../replay.js';
 import { pref, state } from '../state.js';
 import { esc, fmtMs, fmtNum, fmtTime } from '../util.js';
@@ -60,7 +61,7 @@ export function renderMain() {
 	</div>${actions}</div>`;
 	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest))
 		|| '<div class="notice info">Run started, no model calls yet.</div>';
-	main.innerHTML = head + body;
+	main.innerHTML = head + renderTokenPanel(run) + body;
 }
 
 export let renderPending = false;

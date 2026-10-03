@@ -79,7 +79,7 @@ public class MyLoggingAdvisor implements BaseAdvisor {
 		}
 
 		if (this.showConversationHistory) {
-			sb.append("\n - [MEMORY]: " + chatClientRequest.prompt()
+			sb.append("\n - [ALL INSTRUCTIONS]: " + chatClientRequest.prompt()
 				.getInstructions()
 				.stream()
 				.map(m -> m.getMessageType() + ": " + messageContent(m))

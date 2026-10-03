@@ -5,6 +5,7 @@ import java.util.function.Function;
 import org.springaicommunity.typesafe.TypeSafeClient;
 import org.springaicommunity.typesafe.rag.JevDocumentFilter;
 import org.springaicommunity.typesafe.rag.JevDocumentReranker;
+
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -91,7 +92,7 @@ public class DemoApplication {
 				.build();
 
 			ChatClient chatClient = chatClientBuilder
-				.defaultAdvisors(MyLoggingAdvisor.builder().build())
+				.defaultAdvisors(MyLoggingAdvisor.builder().order(1).build())
 				.build();
 
 			var answer = chatClient.prompt()
@@ -106,18 +107,25 @@ public class DemoApplication {
 		}; // @formatter:on
 	}
 
-	// Post-processor that prints each document's score and a snippet, then passes the list on unchanged
+	private static final String GREEN = "\033[38;5;82m";
+
+	private static final String RESET = "\033[0m";
+
+	// Post-processor that prints each document's score and a snippet, then passes the
+	// list on unchanged
 	private static DocumentPostProcessor print(String label, Function<Document, Object> score) {
 		return (query, docs) -> {
-			docs.forEach(d -> System.out.printf("%s %s  %s...%n", label, score.apply(d), first(d.getText(), 80)));
+			docs.forEach(d -> System.out.printf(GREEN + "%s %s  %s..." + RESET + "%n", label, score.apply(d),
+					first(d.getText(), 80)));
 			return docs;
 		};
 	}
 
-	// Wraps a retriever to print every (rewritten and expanded) query that reaches the vector store
+	// Wraps a retriever to print every (rewritten and expanded) query that reaches the
+	// vector store
 	private static DocumentRetriever logging(DocumentRetriever delegate) {
 		return query -> {
-			System.out.println("[retrieve] " + query.text());
+			System.out.println(GREEN + "[retrieve] " + query.text() + RESET);
 			return delegate.retrieve(query);
 		};
 	}

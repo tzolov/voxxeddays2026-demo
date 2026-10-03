@@ -4,7 +4,10 @@ import { parseJson } from './util.js';
 // Each adapter turns a provider's wire JSON into one normalized shape, so a single renderer
 // can show Anthropic, OpenAI and Ollama traffic side by side:
 //   request:  { params, system: [block], tools: [{name, def}], messages: [{role, blocks, raw}] }
-//   response: { stop, usage: {input, output, cacheRead, cacheWrite}, blocks: [block], error }
+//   response: { stop, usage: {input, output, cacheRead, cacheWrite, reasoning}, blocks: [block], error }
+//   usage.input is ALL prompt tokens, cached ones included (cacheRead is a subset of it), so models
+//   compare fairly: Anthropic reports cache reads/writes separately from input_tokens, OpenAI includes
+//   cached tokens in prompt_tokens. reasoning is a subset of output (OpenAI, DeepSeek).
 //   block:    text | tool_use {id, name, input} | tool_result {id, name, content, isError} | thinking | media | raw
 
 export const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
@@ -67,7 +70,9 @@ export const ADAPTERS = {
 			if (m.error) return { error: `${m.error.type}: ${m.error.message}` };
 			const u = m.usage || {};
 			return { stop: m.stop_reason, blocks: anthropicBlocks(m.content),
-				usage: { input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens } };
+				usage: { input: u.input_tokens == null ? undefined
+					: u.input_tokens + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+				output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens } };
 		},
 	},
 
@@ -113,7 +118,9 @@ export const ADAPTERS = {
 				blocks: [...(choice.reasoning_content ? [{ type: 'thinking', text: choice.reasoning_content }] : []),
 					...(choice.content ? openAiParts(choice.content) : []),
 					...(choice.refusal ? [{ type: 'text', text: '⛔ refusal: ' + choice.refusal }] : []), ...openAiToolCalls(choice.tool_calls)],
-				usage: { input: u.prompt_tokens, output: u.completion_tokens, cacheRead: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens } };
+				usage: { input: u.prompt_tokens, output: u.completion_tokens,
+					cacheRead: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens,
+					reasoning: u.completion_tokens_details?.reasoning_tokens } };
 		},
 	},
 

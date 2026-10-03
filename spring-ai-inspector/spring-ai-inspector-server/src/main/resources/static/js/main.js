@@ -109,6 +109,7 @@ document.addEventListener('click', (e) => {
 		case 'view-sequence': savePref('view', 'sequence'); render(); break;
 		case 'seq-ordered': savePref('seqScale', 'ordered'); render(); break;
 		case 'seq-scaled': savePref('seqScale', 'scaled'); render(); break;
+		case 'hl-model': state.highlight = state.highlight === btn.dataset.model ? null : btn.dataset.model; render(); break;
 	}
 	if (btn.dataset.action.startsWith('view-') || btn.dataset.action.startsWith('seq-')) updateHash();
 });

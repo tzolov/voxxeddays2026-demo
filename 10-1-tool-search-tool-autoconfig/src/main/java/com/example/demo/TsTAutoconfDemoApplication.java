@@ -3,16 +3,21 @@ package com.example.demo;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import org.springaicommunity.typesafe.TypeSafeClient;
+import org.springaicommunity.typesafe.toolsearch.JevToolIndex;
+
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.ai.tool.toolsearch.ToolIndex;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.Ordered;
 
@@ -26,6 +31,18 @@ public class TsTAutoconfDemoApplication {
 	@Bean
 	VectorStore vectorStore(EmbeddingModel embeddingModel) {
 		return SimpleVectorStore.builder(embeddingModel).build();
+	}
+
+	// tool-index-type=jev: TypeSafe's Jev picks the tools. Unlike the regex, lucene and
+	// vector indexes it can also answer "no tool applies". The built-in indexes back off
+	// when a ToolIndex bean exists.
+	@Bean
+	@ConditionalOnProperty(name = "spring.ai.chat.client.tool-search-advisor.tool-index-type", havingValue = "jev")
+	ToolIndex jevToolIndex(TypeSafeClient typeSafeClient) {
+		return JevToolIndex.builder(typeSafeClient)
+			.applicabilityThreshold(0.5) // below this, no tool is returned at all
+			.minimumRelevance(0.05) // don't pad maxResults with tools Jev ruled out
+			.build();
 	}
 
 	@Bean
@@ -63,7 +80,7 @@ public class TsTAutoconfDemoApplication {
 			return "The current weather in " + location + " is sunny with a temperature of 25°C.";
 		}
 
-		@Tool(description = "Get of clothing shops names for a given location and at a given time")
+		@Tool(description = "Get the names of clothing shops in a location that are open at a given time")
 		public List<String> clothing(String location,
 				@ToolParam(description = "YYYY-MM-DDTHH:mm:ss") String openAtTime) {
 			return List.of("Foo", "Bar", "Baz");

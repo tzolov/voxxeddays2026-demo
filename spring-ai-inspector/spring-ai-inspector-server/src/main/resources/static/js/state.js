@@ -5,6 +5,7 @@ export const state = {
 	follow: pref('follow', 'true') === 'true',
 	open: new Map(),   // data-key -> boolean (user toggled <details>)
 	tabs: new Map(),   // wire id -> tab name
+	highlight: null,   // 'provider|model' whose round-trips are outlined (tokens panel)
 };
 
 export function pref(key, fallback) {
