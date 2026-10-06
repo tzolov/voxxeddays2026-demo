@@ -227,6 +227,15 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			for (Generation generation : chatResponse.getResults()) {
 				Map<String, Object> g = message(generation.getOutput());
 				g.put("finishReason", generation.getMetadata().getFinishReason());
+				// Spring AI's Anthropic model returns each thinking block as a generation of its own,
+				// before the answer: marked by its signature, or by the encrypted data when redacted.
+				Map<String, Object> properties = generation.getOutput().getMetadata();
+				if (properties.containsKey("signature")) {
+					g.put("thinking", "signed");
+				}
+				else if (properties.containsKey("data")) {
+					g.put("thinking", "redacted");
+				}
 				generations.add(g);
 			}
 			event.put("generations", generations);

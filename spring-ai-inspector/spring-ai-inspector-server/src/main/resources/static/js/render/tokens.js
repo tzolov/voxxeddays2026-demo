@@ -2,7 +2,7 @@
 // Totals per model for a run, including the remote agents its tools called (A2A), so the
 // numbers cover the whole conversation. Usage is normalized by the provider adapters:
 // input is all prompt tokens, cached ones included.
-import { normRequest, normResponse, usageOf } from '../providers.js';
+import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { state } from '../state.js';
 import { esc, fmtNum, isOpen } from '../util.js';
 
@@ -33,7 +33,7 @@ export function tokensByModel(run) {
 		const key = wireModelKey(wire);
 		const rowKey = (remoteApp ? remoteApp + '|' : '') + key;
 		const [provider, model] = [wire.req.provider, key.slice(wire.req.provider.length + 1)];
-		const row = rows.get(rowKey) || { key, provider, model, remote: remoteApp, input: 0, output: 0, cacheRead: 0,
+		const row = rows.get(rowKey) || { key, provider, label: providerLabel(wire), model, remote: remoteApp, input: 0, output: 0, cacheRead: 0,
 			cacheWrite: 0, reasoning: 0, calls: 0 };
 		row.input += u.input || 0;
 		row.output += u.output || 0;
@@ -73,7 +73,7 @@ export function renderTokenPanel(run) {
 			r.cacheWrite && `${fmtNum(r.cacheWrite)} cache write`].filter(Boolean).join(' · ');
 		const on = state.highlight === r.key;
 		return `<button class="tok-row ${on ? 'on' : ''}" data-action="hl-model" data-model="${esc(r.key)}" title="Highlight these round-trips">
-			<span class="tok-name"><span class="fn">${esc(r.model)}</span><span class="pill">${esc(r.provider)}</span>${r.remote ? `<span class="link-badge" title="remote agent">remote · ${esc(r.remote)}</span>` : ''}</span>
+			<span class="tok-name"><span class="fn">${esc(r.model)}</span><span class="pill">${esc(r.label)}</span>${r.remote ? `<span class="link-badge" title="remote agent">remote · ${esc(r.remote)}</span>` : ''}</span>
 			<span class="tok-bar-wrap"><span class="tok-bar" style="width:${pct(sum, max)}%">
 				<span class="t-in" style="flex:${r.input || 0}"><span class="t-cache" style="width:${pct(r.cacheRead, r.input)}%"></span></span>
 				<span class="t-out" style="flex:${r.output || 0}"></span></span></span>

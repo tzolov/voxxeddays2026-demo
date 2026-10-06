@@ -1,13 +1,26 @@
 import { esc, fmtNum, isOpen, prettyMaybeJson } from '../util.js';
+import { renderBlock } from './wire.js';
 
 const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 
-// System prompts are long and repeat on every call: collapsed to a one-line preview by default.
-// Keyed by content, so the same prompt stays open (or closed) across calls and re-renders.
-export function renderSystemMessage(cls, tags, text, body) {
-	const key = 'sys:' + hash(text);
-	return `<details class="msg system${cls}" data-key="${key}" ${isOpen(key, false) ? 'open' : ''}><summary class="role"><span class="chev">▸</span>system${tags}
+// A message folded to a one-line preview when closed. Keys keep it open (or closed) across re-renders.
+function renderFoldedMessage(role, cls, tags, text, body, key, open) {
+	return `<details class="msg ${role}${cls}" data-key="${key}" ${isOpen(key, open) ? 'open' : ''}><summary class="role"><span class="chev">▸</span>${role}${tags}
 		<span class="sys-preview">${esc(text.replace(/\s+/g, ' ').trim())}</span><span class="sys-size">${fmtNum(text.length)} chars</span></summary>${body}</details>`;
+}
+
+// System prompts are long and repeat on every call: collapsed to a one-line preview by default.
+// Keyed by content, so the same prompt stays open (or closed) across calls.
+export function renderSystemMessage(cls, tags, text, body) {
+	return renderFoldedMessage('system', cls, tags, text, body, 'sys:' + hash(text), false);
+}
+
+// The final answer: folded by default to a one-line preview. Keyed by call.
+export function renderAnswerMessage(m, key) {
+	// A thinking block Spring AI returned as a generation of its own (see InspectorAdvisor).
+	if (m.thinking) return renderBlock({ type: 'thinking', text: m.text, signed: m.thinking === 'signed', redacted: m.thinking === 'redacted' });
+	if (!m.text || (m.toolCalls || []).length || (m.media || []).length) return renderSpringMessage(m);
+	return renderFoldedMessage(esc(m.role || 'assistant'), '', '', m.text, `<div class="text">${esc(m.text)}</div>`, key, false);
 }
 
 // ---------------------------------------------------------------- generic (Spring AI) message rendering

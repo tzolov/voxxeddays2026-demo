@@ -52,6 +52,23 @@ class InspectorAdvisorTest {
 	}
 
 	@Test
+	void marksThinkingGenerations() {
+		ChatModel thinking = prompt -> new ChatResponse(List.of(
+				new Generation(AssistantMessage.builder().content("").properties(Map.of("signature", "sig")).build()),
+				new Generation(new AssistantMessage("hello"))));
+		ChatClient.builder(thinking)
+			.defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT))
+			.build()
+			.prompt("hi")
+			.call()
+			.content();
+
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> generations = (List<Map<String, Object>>) this.events.get(1).get("generations");
+		assertThat(generations).extracting(g -> g.get("thinking")).containsExactly("signed", null);
+	}
+
+	@Test
 	void theCallIdIsVisibleToCodeRunningInsideTheCall() {
 		chatClient().prompt("hi").call().content();
 

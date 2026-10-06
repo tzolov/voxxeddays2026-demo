@@ -22,12 +22,13 @@ errors and duration.
 - **Memory after this call** step (03, 09, 19, 20): what each memory store holds after the call, with the entries this
   call wrote highlighted. Chat memory (any advisor holding a `ChatMemory`), spring-ai-session events (archived and
   summary events marked), and memory files (`spring.ai.inspector.memory-dirs`, defaults to `agent.memory.dir`).
-- Runs of 3+ Jev systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire".
+- Runs of 3+ systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire". systemOne
+  round-trips are labelled with who served them, e.g. `typesafe · system-one` or `ollama · system-one`.
 
 ## Sequence view and linked agents
 
 Each run has a **Cards | Sequence** toggle. The sequence view draws the run as lanes (app, advisors, sub-agents, each
-model, Jev, tools, vector store) with arrows in time order: requests solid, returns dashed, labelled with message
+model, systemOne model, tools, vector store) with arrows in time order: requests solid, returns dashed, labelled with message
 counts, `tool_use` names, stop reasons and latencies. **to scale** spaces rows by elapsed time, so the audience sees
 where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane.
 
@@ -95,7 +96,8 @@ How the starter hooks in:
   - `spring.ai.mistralai.base-url` and `spring.ai.mistralai.chat.base-url`: only if unset or pointing at `api.mistral.ai`.
     Both are set because the chat properties preset their own base-url, which wins over the common one.
   - `spring.ai.deepseek.base-url`: only if unset or pointing at `api.deepseek.com`.
-  - `spring.ai.typesafe.base-url`: only if unset or pointing at `api.typesafe.ai`.
+  - `spring.ai.typesafe.base-url`: always, like Anthropic. The proxy forwards to the base-url the app had before (e.g. a
+    local Ollama serving Jev models), or to `https://api.typesafe.ai` when none was set.
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.
 - Tool executions are reported from Spring AI's tool-calling observations. The demos don't include Boot's

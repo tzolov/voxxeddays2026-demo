@@ -67,6 +67,10 @@ document.getElementById('theme').addEventListener('click', () => {
 	savePref('theme', dark ? 'light' : 'dark');
 	applyPrefs();
 });
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+	savePref('sidebar', pref('sidebar', 'open') === 'open' ? 'closed' : 'open');
+	applyPrefs();
+});
 document.getElementById('clear').addEventListener('click', () => fetch('api/events', { method: 'DELETE' }));
 
 function applyPrefs() {
@@ -74,6 +78,9 @@ function applyPrefs() {
 	const theme = pref('theme', '');
 	if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
 	document.getElementById('follow').classList.toggle('on', state.follow);
+	const sidebarOpen = pref('sidebar', 'open') === 'open';
+	document.querySelector('.layout').classList.toggle('collapsed', !sidebarOpen);
+	document.getElementById('sidebar-toggle').setAttribute('aria-expanded', String(sidebarOpen));
 }
 
 document.addEventListener('keydown', (e) => {

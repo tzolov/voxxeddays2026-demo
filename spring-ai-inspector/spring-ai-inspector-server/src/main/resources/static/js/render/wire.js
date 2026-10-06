@@ -1,4 +1,4 @@
-import { adapterOf, normRequest, normResponse } from '../providers.js';
+import { adapterOf, normRequest, normResponse, providerLabel } from '../providers.js';
 import { renderSystemMessage } from './messages.js';
 import { state } from '../state.js';
 import { wireModelKey } from './tokens.js';
@@ -174,7 +174,7 @@ export function renderWire(wire) {
 	const u = nresp && nresp.usage;
 
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
-		<span class="pill">${esc(wire.req.provider)}</span><span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
+		<span class="pill">${esc(providerLabel(wire))}</span><span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	const systemOne = adapterOf(wire)?.kind === 'systemone';
 	if (nreq && systemOne) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;

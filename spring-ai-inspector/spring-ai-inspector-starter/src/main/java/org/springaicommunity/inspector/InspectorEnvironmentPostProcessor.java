@@ -23,9 +23,10 @@ import org.springframework.core.env.MapPropertySource;
  * <p>The original base URL of every routed provider is reported to the inspector
  * ({@code spring.ai.inspector.upstream.<provider>}, sent with {@code run-start}), and the
  * proxy forwards there, so a custom gateway or a mitmweb in front of the provider keeps
- * working. Anthropic is always routed. OpenAI, Ollama, Mistral, DeepSeek and TypeSafe (Jev)
- * are routed only when they point at their default endpoints, because their base URLs
- * imply provider-specific paths (Azure, GitHub Models, ...) that are left alone.
+ * working. Anthropic and TypeSafe (Jev) are always routed: their paths are simply appended to
+ * the base URL, so e.g. TypeSafe served by a local Ollama is recorded too. OpenAI, Ollama,
+ * Mistral and DeepSeek are routed only when they point at their default endpoints, because
+ * their base URLs imply provider-specific paths (Azure, GitHub Models, ...) that are left alone.
  * {@code spring.ai.inspector.route.openai=always} also routes an OpenAI-compatible
  * endpoint whose base URL ends in the {@code /v1} segment, e.g. Amazon Bedrock mantle.
  *
@@ -78,11 +79,9 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 			route(props, environment, url, proxy, "deepseek", "", "https://api.deepseek.com",
 					"spring.ai.deepseek.base-url");
 		}
-		if (isDefault(environment, "spring.ai.typesafe.base-url", "api.typesafe.ai")) {
-			// TypeSafe Jev systemOne calls (guardrails, judges, RAG filters).
-			route(props, environment, url, proxy, "typesafe", "", "https://api.typesafe.ai",
-					"spring.ai.typesafe.base-url");
-		}
+		// TypeSafe Jev systemOne calls (guardrails, judges, RAG filters): always routed, forwarded to
+		// whatever it pointed at before (api.typesafe.ai, a local Ollama serving Jev models, ...).
+		route(props, environment, url, proxy, "typesafe", "", "https://api.typesafe.ai", "spring.ai.typesafe.base-url");
 
 		// addFirst: overrides any base-url in application.properties.
 		environment.getPropertySources().addFirst(new MapPropertySource("spring-ai-inspector", props));

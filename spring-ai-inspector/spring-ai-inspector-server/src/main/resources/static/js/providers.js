@@ -176,6 +176,22 @@ ADAPTERS.typesafe = {
 	},
 };
 
+// Who served a round-trip, from the URL the proxy forwarded it to: e.g. `ollama` for TypeSafe
+// pointed at a local Ollama.
+export function servedBy(wire) {
+	const url = wire.req.url || '';
+	if (/:11434\b|ollama/i.test(url)) return 'ollama';
+	if (/typesafe\.ai/i.test(url)) return 'typesafe';
+	try { return new URL(url).hostname || wire.req.provider; } catch { return wire.req.provider; }
+}
+
+// The provider shown for a round-trip. systemOne is shown by protocol and who served it, since
+// Jev is also served by e.g. a local Ollama; the key stays `typesafe` (proxy path, upstream
+// property, exported runs).
+export function providerLabel(wire) {
+	return wire.req.provider === 'typesafe' ? `${servedBy(wire)} · system-one` : wire.req.provider;
+}
+
 export function adapterOf(wire) {
 	const a = ADAPTERS[wire.req.provider];
 	return a && a.matches(wire.req.path) ? a : null;

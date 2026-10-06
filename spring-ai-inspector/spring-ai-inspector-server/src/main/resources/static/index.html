@@ -8,6 +8,7 @@
 </head>
 <body>
 <div class="topbar">
+	<button class="btn" id="sidebar-toggle" title="Show / hide the runs panel" aria-controls="sidebar">☰</button>
 	<div class="brand"><span class="dot" id="conn"></span>Spring AI Inspector</div>
 	<div class="spacer"></div>
 	<button class="btn" id="follow" title="Jump to each new run automatically">Follow new runs</button>
@@ -22,7 +23,7 @@
 </div>
 <div class="replay" id="replay" hidden></div>
 <div class="layout">
-	<aside class="sidebar"><h2>Runs</h2><div id="runs"></div></aside>
+	<aside class="sidebar" id="sidebar"><h2>Runs</h2><div id="runs"></div></aside>
 	<main class="main" id="main"></main>
 </div>
 

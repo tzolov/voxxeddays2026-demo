@@ -1,6 +1,6 @@
-import { adapterOf, normResponse, usageOf } from '../providers.js';
+import { adapterOf, normResponse, providerLabel, usageOf } from '../providers.js';
 import { memoryHint, renderMemory } from './memory.js';
-import { diffMessages, renderSpringMessage } from './messages.js';
+import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
 import { NOUL_HOT, renderWire } from './wire.js';
 import { state } from '../state.js';
@@ -50,7 +50,7 @@ export function renderItems(items, latest) {
 			const hot = group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length;
 			const ms = group.map((w) => w.resp?.durationMs || 0);
 			html += `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary><span class="chev">▸</span>
-				<span class="pill">typesafe</span><b>${group.length} Jev systemOne checks</b>
+				<span class="pill">${esc(providerLabel(group[0]))}</span><b>${group.length} systemOne checks</b>
 				${done < group.length ? `<span class="spinner"></span><span class="right-meta">${done}/${group.length}</span>` : ''}
 				${done ? `<span class="pill" title="checks with at least one noul answer ≥ ${NOUL_HOT}">${hot} with P(true) ≥ ${NOUL_HOT}</span>` : ''}
 				<span class="right-meta">#${group[0].num}–#${group[group.length - 1].num} · up to ${fmtMs(Math.max(...ms))}</span></summary>
@@ -137,7 +137,7 @@ export function renderCall(call, isLatest) {
 	if (!call.resp) s5 = '<div class="notice info"><span class="spinner"></span> waiting…</div>';
 	else if (call.resp.error) s5 = `<div class="notice err">${esc(call.resp.error)}</div>`;
 	else {
-		s5 = `<div class="msgs answer">${(call.resp.generations || []).map((g) => renderSpringMessage(g)).join('')}</div>`;
+		s5 = `<div class="msgs answer">${(call.resp.generations || []).map((g, i) => renderAnswerMessage(g, `ans:${esc(call.id)}:${i}`)).join('')}</div>`;
 		// Retrieved documents are shown in the RAG step, not as raw context.
 		const ctx = Object.entries(call.resp.context || {}).filter(([k]) => !RAG_CONTEXT_KEYS.has(k));
 		const ctxValue = (v) => typeof v === 'string' ? esc(v) : `<pre>${highlightJson(v)}</pre>`;

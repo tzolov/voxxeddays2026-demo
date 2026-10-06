@@ -1,5 +1,5 @@
-import { normRequest, normResponse, usageOf } from '../providers.js';
-import { fmtCompact } from './tokens.js';
+import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
+import { fmtCompact, wireModelKey } from './tokens.js';
 import { isJevWire } from './cards.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine } from '../util.js';
@@ -21,17 +21,18 @@ export function buildSequence(run) {
 		return key;
 	};
 	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
-	// Token totals per model/Jev lane, shown under the lane head.
+	// Token totals per model/systemOne lane, shown under the lane head.
 	const addTokens = (laneKey, w) => {
 		const u = usageOf(w); const l = lanes.get(laneKey);
 		if (!u || !l) return;
 		l.tokens = { input: (l.tokens?.input || 0) + (u.input || 0), output: (l.tokens?.output || 0) + (u.output || 0) };
 	};
 
+	// One lane per model, keyed like the tokens panel. systemOne lanes say who served them
+	// (TypeSafe, a local Ollama, ...).
 	function wireLane(r, w) {
-		const req = normRequest(w);
-		const model = req?.params?.model || w.req.provider;
-		return isJevWire({ kind: 'wire', ref: w }) ? lane(r, 'jev', '', 'Jev', 'TypeSafe systemOne') : lane(r, 'model', model, model, w.req.provider);
+		const model = wireModelKey(w).slice(w.req.provider.length + 1);
+		return isJevWire({ kind: 'wire', ref: w }) ? lane(r, 'jev', model, model, providerLabel(w)) : lane(r, 'model', model, model, w.req.provider);
 	}
 
 	function wireReturn(w) {
@@ -47,13 +48,15 @@ export function buildSequence(run) {
 		const tools = items.filter((i) => i.kind === 'tool').map((i) => i.ref);
 		for (let i = 0; i < items.length;) {
 			let j = i;
-			while (j < items.length && isJevWire(items[j])) j++;
-			if (j - i >= 3) { // fold runs of Jev checks into one exchange
+			// Fold runs of systemOne checks to the same lane into one exchange.
+			const jevLane = isJevWire(items[i]) && wireLane(r, items[i].ref);
+			while (j < items.length && isJevWire(items[j]) && wireLane(r, items[j].ref) === jevLane) j++;
+			if (j - i >= 3) {
 				const group = items.slice(i, j).map((it) => it.ref);
-				const to = lane(r, 'jev', '', 'Jev', 'TypeSafe systemOne');
+				const to = jevLane;
 				const last = group[group.length - 1];
 				group.forEach((w) => addTokens(to, w));
-				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} Jev checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
+				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} systemOne checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
 				if (last.resp) msgs.push({ seq: last.resp.seq, ts: last.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
 					label: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
 				i = j;
@@ -114,7 +117,7 @@ export function buildSequence(run) {
 		const fresh = call.memory.after ? countWritten(call) : 0;
 		if (fresh) msgs.push({ seq: call.memory.afterSeq, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path });
 		if (call.resp) {
-			const answer = call.resp.error ? '⚠ ' + call.resp.error : (call.resp.generations || []).map((g) => g.text).join(' ');
+			const answer = call.resp.error ? '⚠ ' + call.resp.error : (call.resp.generations || []).filter((g) => !g.thinking).map((g) => g.text).join(' ');
 			msgs.push({ seq: call.resp.seq, ts: call.resp.ts, from: adv, to: from, ret: true, kind: remote ? 'remote' : 'call', path, label: oneLine(answer, 48) });
 			acts.push({ lane: adv, from: call.req.seq, to: call.resp.seq, nest });
 		}

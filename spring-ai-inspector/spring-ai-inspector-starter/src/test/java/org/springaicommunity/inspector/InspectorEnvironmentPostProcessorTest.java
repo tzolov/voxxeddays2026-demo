@@ -98,6 +98,17 @@ class InspectorEnvironmentPostProcessorTest {
 	}
 
 	@Test
+	void routesTypeSafeServedByOllama() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.typesafe.base-url", "http://localhost:11434"));
+
+		assertThat(env.getProperty("spring.ai.typesafe.base-url")).startsWith(url + "/r/").endsWith("/typesafe");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.typesafe")).isEqualTo("http://localhost:11434");
+	}
+
+	@Test
 	void canBeDisabled() throws IOException {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 

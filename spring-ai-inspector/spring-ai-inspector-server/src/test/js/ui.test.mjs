@@ -12,7 +12,7 @@ import { ADAPTERS, anthropicBlock, normRequest, normResponse, usageOf } from '..
 import { diffTools, renderCall, renderItems } from '../../main/resources/static/js/render/cards.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
-import { renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
+import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
 import { noulLeaning, renderBlock, renderWire } from '../../main/resources/static/js/render/wire.js';
 import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
@@ -47,7 +47,7 @@ test('chat memory: advisors inject history, memory shows what the call wrote', (
 	assert.ok(renderCall(first, false).includes('ChatClient'));
 });
 
-test('modular RAG: searches, funnel, documents in the prompt, folded Jev checks', () => {
+test('modular RAG: searches, funnel, documents in the prompt, folded systemOne checks', () => {
 	const [run] = load('modular-rag');
 	const [call] = topCalls(run);
 
@@ -57,10 +57,13 @@ test('modular RAG: searches, funnel, documents in the prompt, folded Jev checks'
 	assert.match(rag, /in the prompt/);
 	assert.match(rag, /jev rerank/);
 	assert.match(rag, /dropped by joining \/ post-processing/);
-	assert.match(renderItems(call.items, null), /\d+ Jev systemOne checks/);
+	assert.match(renderItems(call.items, null), /\d+ systemOne checks/);
 
 	const { lanes } = buildSequence(run);
-	assert.deepEqual(lanes.map((l) => l.label).filter((l) => ['Jev', 'Vector store'].includes(l)), ['Jev', 'Vector store']);
+	// systemOne lanes are named by model and who served it (no upstream reported: TypeSafe).
+	const s1 = lanes.find((l) => l.kind === 'jev');
+	assert.deepEqual([s1.label, s1.sub], ['jev-latest', 'typesafe · system-one']);
+	assert.ok(lanes.some((l) => l.label === 'Vector store'));
 	assert.match(renderSequence(run, false), /<svg/);
 });
 
@@ -103,6 +106,25 @@ test('A2A: the remote agent call is linked under the caller\'s Task tool', () =>
 	assert.equal([...groups.values()].filter(Boolean).length, 1, 'one remote lane group');
 	assert.ok(lanes.some((l) => l.label === 'airbnb-agent'));
 	assert.match(renderCall(topCalls(caller)[0], true), /1 remote call/);
+});
+
+test('systemOne served by a local Ollama: the lane shows the model and ollama', () => {
+	const events = fixture('modular-rag').map((e) => e.provider === 'typesafe' && e.type === 'wire-request'
+		? { ...e, url: 'http://localhost:11434/v1/systemone', body: e.body.replace(/"jev-latest"/g, '"nimble"') } : e);
+	events.forEach(handle);
+	const s1 = buildSequence([...state.runs.values()][0]).lanes.find((l) => l.kind === 'jev');
+
+	assert.deepEqual([s1.label, s1.sub], ['nimble', 'ollama · system-one']);
+});
+
+test('systemOne checks fold only while they go to the same model', () => {
+	let n = 0;
+	fixture('modular-rag').map((e) => e.provider === 'typesafe' && e.type === 'wire-request' && n++ % 2
+		? { ...e, body: e.body.replace(/"jev-latest"/g, '"nimble"') } : e).forEach(handle);
+	const { lanes, msgs } = buildSequence([...state.runs.values()][0]);
+
+	assert.deepEqual(lanes.filter((l) => l.kind === 'jev').map((l) => l.label).sort(), ['jev-latest', 'nimble']);
+	assert.ok(!msgs.some((m) => /systemOne checks/.test(m.label)), 'alternating models never fold');
 });
 
 test('sub-agents: a call made by a tool gets its own lane', () => {
@@ -179,6 +201,8 @@ test('typesafe: systemOne requests and answers', () => {
 	assert.match(html, /<span class="pill">jailbreak: <b>true<\/b> 0\.99<\/span>/);
 	assert.match(html, /<b>true<\/b> · P\(true\)/);
 	assert.doesNotMatch(html, /hot|⚠/);
+	// Labeled by protocol, since Jev is also served by e.g. a local Ollama.
+	assert.match(html, /<span class="pill">typesafe · system-one<\/span>/);
 });
 
 // ---------------------------------------------------------------- escaping
@@ -191,6 +215,19 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	state.open.set(folded.match(/data-key="([^"]+)"/)[1], true);
 	assert.match(renderSpringMessage(m, 'added'), /^<details class="msg system added" data-key="sys:\w+" open>/);
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
+});
+
+test('answers fold to a one-line preview and remember being opened', () => {
+	const m = { role: 'assistant', text: 'Shops open now:\nFoo, Bar.' };
+	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /^<details class="msg assistant" data-key="ans:c1:0" >/);
+	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /sys-preview">Shops open now: Foo, Bar\.</);
+	state.open.set('ans:c1:0', true);
+	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /data-key="ans:c1:0" open>/);
+	// Thinking returned as a generation of its own is shown as thinking, not as an empty answer.
+	const thinking = renderAnswerMessage({ role: 'assistant', text: '', thinking: 'signed' }, 'k');
+	assert.match(thinking, /thinking · hidden \(signature only\)/);
+	assert.doesNotMatch(thinking, /msg assistant/);
+	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', toolCalls: [{ name: 'weather', arguments: '{}' }] }, 'k'), /<details/);
 });
 
 test('noul answers say which way Jev leans, with a band for close calls', () => {
