@@ -85,6 +85,19 @@ class InspectorEnvironmentPostProcessorTest {
 	}
 
 	@Test
+	void routesAnOpenAiCompatibleEndpointWhenAsked() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.route.openai", "always",
+				"spring.ai.openai.base-url", "https://bedrock-mantle.us-east-1.api.aws/v1"));
+
+		assertThat(env.getProperty("spring.ai.openai.base-url")).startsWith(url + "/r/").endsWith("/openai/v1");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.openai"))
+			.isEqualTo("https://bedrock-mantle.us-east-1.api.aws");
+	}
+
+	@Test
 	void canBeDisabled() throws IOException {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 

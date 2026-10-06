@@ -89,6 +89,8 @@ How the starter hooks in:
   - `spring.ai.anthropic.base-url`: always. The proxy forwards to the base-url the app had before (a gateway, a
     mitmweb, ...), or to `https://api.anthropic.com` when none was set.
   - `spring.ai.openai.base-url`: only if unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
+    `spring.ai.inspector.route.openai=always` routes it anyway, for an OpenAI-compatible endpoint whose base URL ends in `/v1`
+    (e.g. Amazon Bedrock mantle).
   - `spring.ai.ollama.base-url`: only if unset or pointing at `localhost:11434`.
   - `spring.ai.mistralai.base-url` and `spring.ai.mistralai.chat.base-url`: only if unset or pointing at `api.mistral.ai`.
     Both are set because the chat properties preset their own base-url, which wins over the common one.
@@ -108,6 +110,7 @@ Settings, for the instrumented applications:
 | `spring.ai.inspector.enabled` | `true` | set to `false` to opt a demo out |
 | `spring.ai.inspector.url` | `http://localhost:9001` | where the inspector runs |
 | `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders shown as file-based memory |
+| `spring.ai.inspector.route.openai` | | `always` routes a non-default OpenAI base URL (an OpenAI-compatible endpoint ending in `/v1`) |
 
 The starter only routes traffic when `<url>/api/ping` identifies itself as the inspector, so another service on the
 same port is never used by mistake. Each run reports the original base URL of every provider it routes, and the

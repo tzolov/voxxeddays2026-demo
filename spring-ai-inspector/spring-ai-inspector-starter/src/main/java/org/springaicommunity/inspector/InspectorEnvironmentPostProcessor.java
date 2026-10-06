@@ -26,6 +26,8 @@ import org.springframework.core.env.MapPropertySource;
  * working. Anthropic is always routed. OpenAI, Ollama, Mistral, DeepSeek and TypeSafe (Jev)
  * are routed only when they point at their default endpoints, because their base URLs
  * imply provider-specific paths (Azure, GitHub Models, ...) that are left alone.
+ * {@code spring.ai.inspector.route.openai=always} also routes an OpenAI-compatible
+ * endpoint whose base URL ends in the {@code /v1} segment, e.g. Amazon Bedrock mantle.
  *
  * <p>The run id in the URL lets the inspector attribute every wire call to the demo
  * that made it. When the inspector is not running nothing changes and the demo talks to
@@ -58,7 +60,8 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		// Anthropic: always routed, forwarded to whatever it pointed at before.
 		route(props, environment, url, proxy, "anthropic", "", "https://api.anthropic.com",
 				"spring.ai.anthropic.base-url");
-		if (isDefault(environment, "spring.ai.openai.base-url", "api.openai.com")) {
+		if (isDefault(environment, "spring.ai.openai.base-url", "api.openai.com")
+				|| "always".equalsIgnoreCase(environment.getProperty("spring.ai.inspector.route.openai"))) {
 			// The OpenAI SDK's base URL includes the /v1 version segment.
 			route(props, environment, url, proxy, "openai", "/v1", "https://api.openai.com", "spring.ai.openai.base-url");
 		}
@@ -126,7 +129,8 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	private static String models(ConfigurableEnvironment environment) {
 		StringBuilder models = new StringBuilder();
 		for (String provider : new String[] { "anthropic", "openai", "ollama", "mistralai", "deepseek", "google.genai" }) {
-			String model = environment.getProperty("spring.ai." + provider + ".chat.options.model");
+			String model = environment.getProperty("spring.ai." + provider + ".chat.options.model",
+					environment.getProperty("spring.ai." + provider + ".chat.model", ""));
 			if (model != null && !model.isBlank()) {
 				models.append(models.isEmpty() ? "" : ", ").append(model);
 			}
@@ -154,8 +158,9 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 
 	/**
 	 * Derives a readable name such as {@code 03-chat-memory} from the location of the
-	 * main class: {@code .../03-chat-memory/target/classes} or
-	 * {@code .../03-chat-memory/target/03-chat-memory.jar}.
+	 * main class: {@code .../03-chat-memory/target/classes},
+	 * {@code .../03-chat-memory/target/03-chat-memory.jar}, or Gradle's
+	 * {@code .../03-chat-memory/build/classes/kotlin/main}.
 	 */
 	private String appName(SpringApplication application) {
 		Class<?> mainClass = application.getMainApplicationClass();
@@ -165,6 +170,9 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		try {
 			String location = mainClass.getProtectionDomain().getCodeSource().getLocation().toString();
 			int target = location.indexOf("/target/");
+			if (target < 0) {
+				target = location.indexOf("/build/");
+			}
 			if (target > 0) {
 				String module = Path.of(location.substring(0, target).replaceFirst("^[a-z:]+:", ""))
 					.getFileName()
