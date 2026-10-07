@@ -3,7 +3,7 @@
 // numbers cover the whole conversation. Usage is normalized by the provider adapters:
 // input is all prompt tokens, cached ones included.
 import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
-import { state } from '../state.js';
+import { pref, state } from '../state.js';
 import { esc, fmtNum, isOpen } from '../util.js';
 
 /** The model a round-trip went to, as `provider|model` (also the highlight key). */
@@ -80,8 +80,11 @@ export function renderTokenPanel(run) {
 			<span class="tok-num">${fmtNum(r.input)}</span><span class="tok-num">${fmtNum(r.output)}</span>
 			<span class="tok-extra">${esc(extras)}</span><span class="tok-num">${r.calls}</span></button>`;
 	}).join('');
-	return `<details class="fold tokens" data-key="${esc(key)}" ${isOpen(key, true) ? 'open' : ''}>
-		<summary>Tokens by model · <b>${fmtNum(total.input)}</b> in · <b>${fmtNum(total.output)}</b> out${hasRemote ? ' · incl. remote agents' : ''}</summary>
+	// Pinned, the panel stays in view while the cards or the sequence scroll under it.
+	const pinned = pref('pinTokens', 'true') === 'true';
+	return `<details class="fold tokens${pinned ? ' pinned' : ''}" data-key="${esc(key)}" ${isOpen(key, true) ? 'open' : ''}>
+		<summary>Tokens by model · <b>${fmtNum(total.input)}</b> in · <b>${fmtNum(total.output)}</b> out${hasRemote ? ' · incl. remote agents' : ''}
+			<button class="pin" data-action="pin-tokens" aria-pressed="${pinned}" title="${pinned ? 'Unpin: scroll with the page' : 'Pin: keep in view while scrolling'}">📌</button></summary>
 		<div class="tok-grid">
 			<div class="tok-row tok-head-row"><span>model</span>
 				<span><span class="t-key t-in"></span>input <span class="t-key t-cache"></span>cached <span class="t-key t-out"></span>output</span>

@@ -42,8 +42,16 @@ test('chat memory: advisors inject history, memory shows what the call wrote', (
 	assert.equal(topCalls(run).length, 2);
 	assert.match(renderCall(second, true), /\+2 added/);
 	const memory = renderMemory(second);
-	assert.match(memory, /\+2 written by this call/);
+	assert.match(memory, /\+2 new/);
 	assert.match(memory, /2 already in memory before this call/);
+	// Both the earlier and the newly written messages fold, closed by default.
+	assert.match(memory, /<details class="fold" data-key="mem:[^"]+:new" ><summary>2 written by this call<\/summary>/);
+	// Fold keys are per call, and the sequence's memory note opens this call's fold.
+	const newKey = memory.match(/data-key="(mem:[^"]+:new)"/)[1];
+	assert.ok(newKey.startsWith(`mem:${second.id}:`));
+	assert.ok(!renderMemory(first).includes(newKey));
+	const note = buildSequence(run).msgs.find((m) => m.note && m.path.includes('call:' + second.id));
+	assert.equal(note.path[note.path.length - 1], newKey);
 	assert.ok(renderCall(first, false).includes('ChatClient'));
 });
 
@@ -74,6 +82,22 @@ test('tools: tool runs sit between the round-trips that requested and consumed t
 	assert.deepEqual(call.items.map((i) => i.kind), ['wire', 'tool', 'tool', 'wire']);
 	assert.ok(call.wires.every((w) => usageOf(w).input > 0));
 	assert.match(renderCall(call, true), /getTemperature/);
+
+	// Model round-trips get activation bars on the model lane, like tool runs and calls.
+	const { lanes, acts } = buildSequence(run);
+	const modelLanes = lanes.filter((l) => l.kind === 'model').map((l) => l.key);
+	assert.equal(acts.filter((a) => modelLanes.includes(a.lane)).length, call.wires.length);
+});
+
+test('a round-trip whose response was never recorded ends its bar with the call', () => {
+	let dropped = false;
+	fixture('tools').filter((e) => e.type !== 'wire-response' || dropped || !(dropped = true)).forEach(handle);
+	const run = [...state.runs.values()][0];
+	const [call] = topCalls(run);
+	const { lanes, acts } = buildSequence(run);
+	const model = lanes.find((l) => l.kind === 'model').key;
+
+	assert.equal(acts.find((a) => a.lane === model && a.from === call.wires[0].req.seq).to, call.resp.seq);
 });
 
 test('tools that pass through the advisors stay visible after them', () => {

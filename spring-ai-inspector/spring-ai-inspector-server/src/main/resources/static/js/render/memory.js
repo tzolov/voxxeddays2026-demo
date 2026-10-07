@@ -4,11 +4,14 @@ import { esc, fmtNum, isOpen, oneLine } from '../util.js';
 // ---------------------------------------------------------------- memory
 export const MEMORY_TITLES = { 'chat-memory': 'Chat memory', session: 'Session events', files: 'Memory files' };
 
-export function renderMemoryStore(store, before) {
+// Fold keys are per call: opening a store's folds on one call leaves the other calls alone.
+export const memoryStoreKey = (callId, store) => `mem:${callId}:${store.kind}:${store.id}`;
+
+export function renderMemoryStore(store, before, callId) {
 	const head = `<div class="mem-head"><b>${esc(MEMORY_TITLES[store.kind] || store.kind)}</b>
 		<span class="chip">${esc(store.source)}</span>${store.memory ? `<span class="pill">${esc(store.memory)}</span>` : ''}
 		<span class="pill" title="${esc(store.id)}">${store.kind === 'files' ? 'dir' : 'id'}: <b>${esc(oneLine(store.id, 40))}</b></span>`;
-	const key = 'mem:' + store.kind + ':' + store.id;
+	const key = memoryStoreKey(callId, store);
 	if (store.kind === 'files') {
 		const prev = new Map((before?.items || []).map((f) => [f.name, f]));
 		const rows = store.items.map((f) => {
@@ -29,7 +32,7 @@ export function renderMemoryStore(store, before) {
 		if (pool.get(sg)) { pool.set(sg, pool.get(sg) - 1); return { m, fresh: false }; }
 		return { m, fresh: true };
 	});
-	const fresh = marked.filter((x) => x.fresh).length;
+	const added = marked.filter((x) => x.fresh);
 	const archived = store.items.filter((m) => m.archived).length;
 	const render = (x) => {
 		let html = renderSpringMessage(x.m);
@@ -40,18 +43,19 @@ export function renderMemoryStore(store, before) {
 	};
 	const old = marked.filter((x) => !x.fresh);
 	const oldKey = key + ':old';
+	const newKey = key + ':new';
 	return `<div class="mem-store">${head}<span class="pill">${store.items.length} ${store.kind === 'session' ? 'events' : 'messages'}</span>
-		<span class="pill ${fresh ? 'cool' : ''}">${fresh ? `+${fresh} written by this call` : 'nothing written'}</span>
+		<span class="pill ${added.length ? 'cool' : ''}">${added.length ? `+${added.length} new` : 'nothing written'}</span>
 		${archived ? `<span class="pill">${archived} archived</span>` : ''}</div>
 		${old.length ? `<details class="fold" data-key="${esc(oldKey)}" ${isOpen(oldKey, false) ? 'open' : ''}><summary>${old.length} already in memory before this call</summary><div class="msgs">${old.map(render).join('')}</div></details>` : ''}
-		<div class="msgs" style="margin-top:.35rem">${marked.filter((x) => x.fresh).map(render).join('')}</div></div>`;
+		${added.length ? `<details class="fold" data-key="${esc(newKey)}" ${isOpen(newKey, false) ? 'open' : ''}><summary>${added.length} written by this call</summary><div class="msgs">${added.map(render).join('')}</div></details>` : ''}</div>`;
 }
 
 export function renderMemory(call) {
 	const after = call.memory.after; const before = call.memory.before || [];
 	if (!after) return '<div class="notice info"><span class="spinner"></span> waiting for the call to finish…</div>';
 	const match = (s) => before.find((b) => b.kind === s.kind && b.id === s.id && b.source === s.source);
-	return after.map((s) => renderMemoryStore(s, match(s))).join('');
+	return after.map((s) => renderMemoryStore(s, match(s), call.id)).join('');
 }
 
 export function memoryHint(call) {

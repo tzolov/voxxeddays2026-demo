@@ -73,6 +73,10 @@ export function render() {
 		const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
 		renderSidebar();
 		renderMain();
+		// The pinned tokens panel sticks right under the top bar and, while replaying, the replay bar.
+		const replayBar = document.getElementById('replay');
+		const top = document.querySelector('.topbar').offsetHeight + (replayBar.hidden ? 0 : replayBar.offsetHeight);
+		document.documentElement.style.setProperty('--pin-top', top + 'px');
 		if (state.follow && nearBottom) window.scrollTo(0, document.body.scrollHeight);
 	});
 }

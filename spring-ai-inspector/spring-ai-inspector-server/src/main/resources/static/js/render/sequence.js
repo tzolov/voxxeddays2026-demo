@@ -1,6 +1,7 @@
 import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { fmtCompact, wireModelKey } from './tokens.js';
 import { isJevWire } from './cards.js';
+import { memoryStoreKey } from './memory.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine } from '../util.js';
 
@@ -13,7 +14,7 @@ export function buildSequence(run) {
 	const lanes = new Map(); // key -> {key, label, sub, group, kind}
 	const groups = new Map(); // runId -> label
 	const msgs = []; // {seq, ts, from, to, label, kind, ret, path, note}
-	const acts = []; // activation bars {lane, from: seq, to: seq}
+	const acts = []; // activation bars {lane, from: seq, to: seq}: calls, tool runs, model round-trips, searches
 	const lane = (r, kind, id, label, sub) => {
 		const key = `${r.id}|${kind}|${id}`;
 		if (!lanes.has(key)) lanes.set(key, { key, label, sub, group: r.id, kind });
@@ -46,6 +47,8 @@ export function buildSequence(run) {
 
 	function walkItems(r, call, items, adv, path, nest = 0) {
 		const tools = items.filter((i) => i.kind === 'tool').map((i) => i.ref);
+		// A round-trip with no recorded response ends with its call (e.g. the call failed), or runs on while the call does.
+		const openEnd = call?.resp ? call.resp.seq : Infinity;
 		for (let i = 0; i < items.length;) {
 			let j = i;
 			// Fold runs of systemOne checks to the same lane into one exchange.
@@ -54,11 +57,13 @@ export function buildSequence(run) {
 			if (j - i >= 3) {
 				const group = items.slice(i, j).map((it) => it.ref);
 				const to = jevLane;
-				const last = group[group.length - 1];
+				// Checks may answer out of order: the group is done at its latest response.
+				const done = group.every((w) => w.resp) ? group.reduce((a, w) => (w.resp.seq > a.resp.seq ? w : a)) : null;
 				group.forEach((w) => addTokens(to, w));
 				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} systemOne checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
-				if (last.resp) msgs.push({ seq: last.resp.seq, ts: last.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
+				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
 					label: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
+				acts.push({ lane: to, from: group[0].req.seq, to: done ? done.resp.seq : openEnd, nest: 0 });
 				i = j;
 				continue;
 			}
@@ -70,6 +75,7 @@ export function buildSequence(run) {
 				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions` : `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
 				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: adv, to, label, kind, path: [...path, 'wire:' + w.id] });
 				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: adv, ret: true, kind, label: wireReturn(w), path: [...path, 'wire:' + w.id] });
+				acts.push({ lane: to, from: w.req.seq, to: w.resp ? w.resp.seq : openEnd, nest: 0 });
 			}
 			else if (it.kind === 'tool') {
 				const t = it.ref; const to = lane(r, 'tool', '', 'Tools', '');
@@ -99,6 +105,7 @@ export function buildSequence(run) {
 			msgs.push({ seq: sr.seq, ts: sr.ts, from: adv, to, kind: 'vector', label: `🔎 ${oneLine(sr.query, 40)}`, path });
 			msgs.push({ seq: sr.seq + 0.5, ts: sr.ts, from: to, to: adv, ret: true, kind: 'vector', path,
 				label: `${sr.results.length} hits${sr.results.length ? ' · best ' + Math.max(...sr.results.map((x) => x.score || 0)).toFixed(2) : ''} · ${fmtMs(sr.durationMs)}` });
+			acts.push({ lane: to, from: sr.seq, to: sr.seq + 0.5, nest: 0 });
 		}
 	}
 
@@ -115,7 +122,10 @@ export function buildSequence(run) {
 			label: `${remote ? 'A2A · ' : ''}#${call.num} “${oneLine(user?.text || '', 44)}”` });
 		walkItems(r, call, call.items, adv, path, nest);
 		const fresh = call.memory.after ? countWritten(call) : 0;
-		if (fresh) msgs.push({ seq: call.memory.afterSeq, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path });
+		// The note opens the "written by this call" folds of the memory step.
+		const grew = (s) => s.kind !== 'files' && s.items.length > ((call.memory.before || []).find((b) => b.kind === s.kind && b.id === s.id)?.items.length || 0);
+		const memPath = [...path, ...(call.memory.after || []).filter(grew).map((s) => memoryStoreKey(call.id, s) + ':new')];
+		if (fresh) msgs.push({ seq: call.memory.afterSeq, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path: memPath });
 		if (call.resp) {
 			const answer = call.resp.error ? '⚠ ' + call.resp.error : (call.resp.generations || []).filter((g) => !g.thinking).map((g) => g.text).join(' ');
 			msgs.push({ seq: call.resp.seq, ts: call.resp.ts, from: adv, to: from, ret: true, kind: remote ? 'remote' : 'call', path, label: oneLine(answer, 48) });
