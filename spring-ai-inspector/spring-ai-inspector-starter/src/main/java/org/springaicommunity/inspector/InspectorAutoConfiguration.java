@@ -56,9 +56,15 @@ public class InspectorAutoConfiguration {
 	}
 
 	@Bean
+	InspectorToolOrigins inspectorToolOrigins() {
+		return new InspectorToolOrigins();
+	}
+
+	@Bean
 	@ConditionalOnClass(ToolCallingObservationContext.class)
-	InspectorToolObservationHandler inspectorToolObservationHandler(InspectorClient client) {
-		return new InspectorToolObservationHandler(client);
+	InspectorToolObservationHandler inspectorToolObservationHandler(InspectorClient client,
+			InspectorToolOrigins origins) {
+		return new InspectorToolObservationHandler(client, origins);
 	}
 
 	/**
@@ -95,6 +101,19 @@ public class InspectorAutoConfiguration {
 		static InspectorVectorStorePostProcessor inspectorVectorStorePostProcessor(
 				ObjectProvider<InspectorClient> client) {
 			return new InspectorVectorStorePostProcessor(client);
+		}
+
+	}
+
+	/** Tags MCP tools with the MCP connection and server they come from. */
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = "org.springframework.ai.mcp.McpToolNamePrefixGenerator")
+	static class McpInspection {
+
+		@Bean
+		static InspectorMcpToolNamePostProcessor inspectorMcpToolNamePostProcessor(
+				ObjectProvider<InspectorToolOrigins> origins) {
+			return new InspectorMcpToolNamePostProcessor(origins);
 		}
 
 	}

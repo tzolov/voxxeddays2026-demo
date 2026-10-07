@@ -249,6 +249,7 @@ table.s1 td.a { width: 38%; }
 .big { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pill.hot { color: var(--removed); border-color: var(--removed); }
 .pill.cool { color: var(--tool); border-color: var(--tool); }
+.pill.mcp { color: var(--system); border-color: var(--system); background: var(--system-soft); }
 details.fold { margin-top: .4rem; }
 details.fold > summary { cursor: pointer; color: var(--muted); font-size: .82rem; list-style: none; }
 details.fold > summary::before { content: "▸ "; }

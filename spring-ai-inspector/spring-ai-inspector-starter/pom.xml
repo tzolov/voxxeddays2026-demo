@@ -28,6 +28,12 @@
 			<artifactId>spring-ai-vector-store</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<!-- Optional: tag MCP tools with the MCP connection and server they come from -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-mcp</artifactId>
+			<optional>true</optional>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>

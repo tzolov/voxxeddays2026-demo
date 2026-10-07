@@ -9,7 +9,9 @@ A live web UI that shows what each demo sends to the model, in three layers:
 
 Nested `ChatClient` calls (for example sub-agents) are shown inside the call that triggered them. Tool executions
 (including MCP tools) appear between the round-trips that requested and consumed them, with arguments, result,
-errors and duration.
+errors and duration. MCP tools are tagged with the MCP connection and server they come from (an
+`MCP · <connection>` badge, and a lane per MCP connection in the sequence view), recorded by wrapping Spring AI's
+`McpToolNamePrefixGenerator`, which names every MCP tool handed to the model.
 
 ## RAG and memory
 

@@ -20,9 +20,11 @@ class InspectorToolObservationHandlerTest {
 
 	private final ObservationRegistry registry = ObservationRegistry.create();
 
+	private final InspectorToolOrigins origins = new InspectorToolOrigins();
+
 	InspectorToolObservationHandlerTest() {
 		InspectorClient client = new InspectorClient("run-1", body -> this.events.add(new JsonHelper().fromJsonToMap(body)));
-		this.registry.observationConfig().observationHandler(new InspectorToolObservationHandler(client));
+		this.registry.observationConfig().observationHandler(new InspectorToolObservationHandler(client, this.origins));
 	}
 
 	private Observation observe(String toolCallId) {
@@ -42,6 +44,22 @@ class InspectorToolObservationHandlerTest {
 		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
 		assertThat(this.events.get(0).get("name")).isEqualTo("airbnb_search");
 		assertThat(this.events.get(1).get("toolId")).isEqualTo(this.events.get(0).get("toolId"));
+	}
+
+	@Test
+	void anMcpToolCarriesItsConnectionAndServer() {
+		this.origins.put("airbnb_search", Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
+
+		observe("call-1").stop();
+
+		assertThat(this.events.get(0).get("mcp")).isEqualTo(Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
+	}
+
+	@Test
+	void aLocalToolHasNoMcpOrigin() {
+		observe("call-1").stop();
+
+		assertThat(this.events.get(0)).doesNotContainKey("mcp");
 	}
 
 	@Test

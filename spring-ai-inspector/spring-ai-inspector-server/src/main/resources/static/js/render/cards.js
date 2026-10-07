@@ -7,12 +7,17 @@ import { state } from '../state.js';
 import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine, parseJson, prettyMaybeJson } from '../util.js';
 
 // ---------------------------------------------------------------- tool executions
+// Where an MCP tool comes from: connection, server and the tool's own name on that server.
+const mcpTitle = (mcp) => [mcp.connection && `MCP connection: ${mcp.connection}`,
+	mcp.server && `server: ${mcp.server}${mcp.serverVersion ? ' ' + mcp.serverVersion : ''}`, mcp.tool && `tool: ${mcp.tool}`].filter(Boolean).join('\n');
+
 export function renderTool(tool) {
 	const key = 'tool:' + tool.id;
 	const st = tool.start; const end = tool.end;
 	const args = parseJson(st.arguments);
 	let summary = `<span class="chev">▸</span><span class="num">⚙</span><span class="fn">${esc(st.name)}</span>
-		${st.toolType ? `<span class="pill">${esc(st.toolType)}</span>` : ''}<span class="oneline">${esc(oneLine(st.arguments, 80))}</span><span class="arrow">→</span>`;
+		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(st.mcp.connection || st.mcp.server || 'server')}</span>`
+		: st.toolType ? `<span class="pill">${esc(st.toolType)}</span>` : ''}<span class="oneline">${esc(oneLine(st.arguments, 80))}</span><span class="arrow">→</span>`;
 	if (!end) summary += '<span class="spinner"></span><span class="right-meta">running…</span>';
 	else if (end.error) summary += `<span class="pill err">${esc(oneLine(end.error, 60))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;
 	else summary += `<span class="oneline">${esc(oneLine(end.result, 80))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;

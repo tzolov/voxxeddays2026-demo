@@ -21,6 +21,10 @@ export function buildSequence(run) {
 		if (!groups.has(r.id)) groups.set(r.id, r === run ? null : r.app);
 		return key;
 	};
+	// MCP tools get a lane per MCP connection; the application's own tools share one.
+	const toolLane = (r, t) => (t.start.mcp?.connection
+		? lane(r, 'tool', 'mcp:' + t.start.mcp.connection, t.start.mcp.connection, `MCP · ${t.start.mcp.server || 'server'}`)
+		: lane(r, 'tool', '', 'Tools', ''));
 	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
 	// Token totals per model/systemOne lane, shown under the lane head.
 	const addTokens = (laneKey, w) => {
@@ -78,7 +82,7 @@ export function buildSequence(run) {
 				acts.push({ lane: to, from: w.req.seq, to: w.resp ? w.resp.seq : openEnd, nest: 0 });
 			}
 			else if (it.kind === 'tool') {
-				const t = it.ref; const to = lane(r, 'tool', '', 'Tools', '');
+				const t = it.ref; const to = toolLane(r, t);
 				msgs.push({ seq: t.start.seq, ts: t.start.ts, from: adv, to, kind: 'tool', label: `${t.start.name}(${oneLine(t.start.arguments, 40)})`, path: [...path, 'tool:' + t.id] });
 				for (const rc of t.remoteCalls || []) walkCall(rc.run, rc, to, [...path, 'tool:' + t.id], 0);
 				if (t.end) {
@@ -92,7 +96,7 @@ export function buildSequence(run) {
 				// A nested call made while a tool runs is a sub-agent called by that tool;
 				// otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
 				const byTool = tools.find((t) => t.start.seq < nested.req.seq && (!t.end || t.end.seq > nested.req.seq));
-				if (byTool) walkCall(r, nested, lane(r, 'tool', '', 'Tools', ''), path, 0, byTool.start.name);
+				if (byTool) walkCall(r, nested, toolLane(r, byTool), path, 0, byTool.start.name);
 				else walkCall(r, nested, adv, path, nest + 1, null, adv);
 			}
 			else if (it.kind === 'ingest') {

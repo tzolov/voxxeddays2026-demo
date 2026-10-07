@@ -100,6 +100,19 @@ test('a round-trip whose response was never recorded ends its bar with the call'
 	assert.equal(acts.find((a) => a.lane === model && a.from === call.wires[0].req.seq).to, call.resp.seq);
 });
 
+test('MCP tools show their connection and get a lane per MCP connection', () => {
+	let first = true;
+	const mcp = { connection: 'poet-server', server: 'mcp-server-voxxeddays-2026', serverVersion: '0.0.1', tool: 'getTemperature' };
+	// The first call comes from an MCP server, the second is a local tool of the same name.
+	fixture('tools').map((e) => e.type === 'tool-start' && first && !(first = false) ? { ...e, mcp } : e).forEach(handle);
+	const run = [...state.runs.values()][0];
+	const html = renderCall(topCalls(run)[0], true);
+
+	assert.match(html, /<span class="pill mcp" title="MCP connection: poet-server\nserver: mcp-server-voxxeddays-2026 0\.0\.1\ntool: getTemperature">MCP · poet-server<\/span>/);
+	const tools = buildSequence(run).lanes.filter((l) => l.kind === 'tool').map((l) => [l.label, l.sub]);
+	assert.deepEqual(tools, [['poet-server', 'MCP · mcp-server-voxxeddays-2026'], ['Tools', '']]);
+});
+
 test('tools that pass through the advisors stay visible after them', () => {
 	const [run] = load('tools');
 	const html = renderCall(topCalls(run)[0], true);

@@ -41,8 +41,15 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 
 	private final InspectorClient client;
 
+	private final InspectorToolOrigins origins;
+
 	public InspectorToolObservationHandler(InspectorClient client) {
+		this(client, new InspectorToolOrigins());
+	}
+
+	public InspectorToolObservationHandler(InspectorClient client, InspectorToolOrigins origins) {
 		this.client = client;
+		this.origins = origins;
 	}
 
 	@Override
@@ -62,6 +69,8 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 		String toolId = execution.toolId;
 		String clientCallId = InspectorAdvisor.currentCallId();
 		String thread = Thread.currentThread().getName();
+		// Where the tool comes from, e.g. the MCP connection and server of an MCP tool.
+		Map<String, Object> mcp = this.origins.get(context.getToolDefinition().name());
 		this.client.send("tool-start", () -> {
 			Map<String, Object> event = new LinkedHashMap<>();
 			event.put("toolId", toolId);
@@ -72,6 +81,9 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 			event.put("description", truncate(context.getToolDefinition().description(), 500));
 			event.put("arguments", context.getToolCallArguments());
 			event.put("thread", thread);
+			if (mcp != null) {
+				event.put("mcp", mcp);
+			}
 			return event;
 		});
 	}
