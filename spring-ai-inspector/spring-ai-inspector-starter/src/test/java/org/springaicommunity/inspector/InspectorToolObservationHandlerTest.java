@@ -48,11 +48,21 @@ class InspectorToolObservationHandlerTest {
 
 	@Test
 	void anMcpToolCarriesItsConnectionAndServer() {
-		this.origins.put("airbnb_search", Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
+		this.origins.put("airbnb_search", Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"),
+				"search");
 
 		observe("call-1").stop();
 
 		assertThat(this.events.get(0).get("mcp")).isEqualTo(Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
+	}
+
+	@Test
+	void aLocalToolNamedLikeAnMcpToolIsNotTaggedAsMcp() {
+		this.origins.put("airbnb_search", Map.of("connection", "airbnb", "tool", "airbnb_search"), "the MCP tool");
+
+		observe("call-1").stop(); // described "search"
+
+		assertThat(this.events.get(0)).doesNotContainKey("mcp");
 	}
 
 	@Test

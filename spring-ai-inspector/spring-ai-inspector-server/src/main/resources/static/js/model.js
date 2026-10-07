@@ -72,6 +72,18 @@ export function handle(ev) {
 			if (tool) tool.end = ev;
 			break;
 		}
+		case 'mcp-message': {
+			// The starter attributes each message to its MCP tool run (toolId); the rest
+			// (initialize, tools/list, ...) belong to the connection itself.
+			const tool = ev.toolId && run.tools.get(ev.toolId);
+			if (tool) (tool.mcp ||= []).push(ev);
+			else {
+				run.mcp ||= new Map();
+				if (!run.mcp.has(ev.connection)) run.mcp.set(ev.connection, []);
+				run.mcp.get(ev.connection).push(ev);
+			}
+			break;
+		}
 		case 'vector-search': {
 			const call = run.calls.get(ev.clientCallId);
 			(call ? call.searches : (run.searches ||= [])).push(ev);

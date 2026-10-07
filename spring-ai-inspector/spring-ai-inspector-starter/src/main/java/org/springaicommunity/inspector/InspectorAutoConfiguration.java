@@ -116,6 +116,14 @@ public class InspectorAutoConfiguration {
 			return new InspectorMcpToolNamePostProcessor(origins);
 		}
 
+		/** Records the MCP messages of every auto-configured MCP client connection. */
+		@Bean
+		@ConditionalOnClass(name = "org.springframework.ai.mcp.client.common.autoconfigure.NamedClientMcpTransport")
+		static InspectorMcpTransportPostProcessor inspectorMcpTransportPostProcessor(
+				ObjectProvider<InspectorClient> client, ObjectProvider<InspectorToolOrigins> origins) {
+			return new InspectorMcpTransportPostProcessor(client, origins);
+		}
+
 	}
 
 	@Bean

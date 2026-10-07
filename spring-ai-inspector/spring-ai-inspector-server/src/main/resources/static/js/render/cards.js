@@ -1,4 +1,5 @@
 import { adapterOf, normResponse, providerLabel, usageOf } from '../providers.js';
+import { renderMcpMessages } from './mcp.js';
 import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
@@ -16,7 +17,7 @@ export function renderTool(tool) {
 	const st = tool.start; const end = tool.end;
 	const args = parseJson(st.arguments);
 	let summary = `<span class="chev">▸</span><span class="num">⚙</span><span class="fn">${esc(st.name)}</span>
-		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(st.mcp.connection || st.mcp.server || 'server')}</span>`
+		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(st.mcp.connection || st.mcp.server || 'MCP')}</span>`
 		: st.toolType ? `<span class="pill">${esc(st.toolType)}</span>` : ''}<span class="oneline">${esc(oneLine(st.arguments, 80))}</span><span class="arrow">→</span>`;
 	if (!end) summary += '<span class="spinner"></span><span class="right-meta">running…</span>';
 	else if (end.error) summary += `<span class="pill err">${esc(oneLine(end.error, 60))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;
@@ -27,9 +28,12 @@ export function renderTool(tool) {
 		<div><div class="col-title">→ arguments${st.toolCallId ? ' · ' + esc(st.toolCallId) : ''}</div><pre class="json">${args === undefined ? esc(st.arguments) : highlightJson(args ?? {})}</pre>
 			${st.description ? `<div class="s1-crit" style="margin-top:.4rem">${esc(st.description)}</div>` : ''}</div>
 		<div><div class="col-title">← result</div>${result}</div></div></div>`;
+	// MCP messages exchanged while the tool ran: the call, the server's logs, sampling requests, ...
+	const mcp = tool.mcp?.length ? `<div class="pane on" style="padding-top:0"><div class="col-title">MCP messages · ${esc(st.mcp?.connection ?? '')}</div>${renderMcpMessages(tool.mcp)}</div>` : '';
+	if (mcp) summary += `<span class="pill mcp" title="MCP messages while the tool ran">${tool.mcp.length} MCP msgs</span>`;
 	const remote = (tool.remoteCalls || []).map((rc) => `<div class="remote-head">↘ handled by <b>${esc(rc.run.app)}</b> · linked by timing</div>${renderCall(rc, false)}`).join('');
 	if (remote) summary += `<span class="link-badge">↘ ${tool.remoteCalls.length} remote call${tool.remoteCalls.length === 1 ? '' : 's'}</span>`;
-	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, !!remote) ? 'open' : ''}><summary>${summary}</summary>${body}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
+	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, !!remote) ? 'open' : ''}><summary>${summary}</summary>${body}${mcp}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
 }
 
 export function renderItem(it, latest) {

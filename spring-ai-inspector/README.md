@@ -10,8 +10,19 @@ A live web UI that shows what each demo sends to the model, in three layers:
 Nested `ChatClient` calls (for example sub-agents) are shown inside the call that triggered them. Tool executions
 (including MCP tools) appear between the round-trips that requested and consumed them, with arguments, result,
 errors and duration. MCP tools are tagged with the MCP connection and server they come from (an
-`MCP · <connection>` badge, and a lane per MCP connection in the sequence view), recorded by wrapping Spring AI's
-`McpToolNamePrefixGenerator`, which names every MCP tool handed to the model.
+`MCP · <connection>` badge, and a lane per MCP connection in the sequence view). The origins are learned from each
+connection's `tools/list` responses, which covers every MCP tool callback provider, including ones built by hand, and
+from the auto-configured `McpToolNamePrefixGenerator`, which knows the exact names of tools it renames on a clash
+(`alt_<n>_<name>`). An application tool with the same name as an MCP tool is told apart by its description.
+
+The MCP messages themselves are recorded too, by wrapping the MCP client transports Spring AI auto-configures (stdio,
+Streamable HTTP, SSE): every JSON-RPC message in both directions, serialized off the I/O threads, with long strings cut.
+Messages exchanged while an MCP tool runs (the `tools/call`, the server's log and progress notifications, its sampling
+requests and the client's answers) are listed on that tool: a `tools/call` and its response are matched to the tool
+run by tool name and request id, what the server sends in between goes to the connection's latest tool run (MCP does
+not tie it to a request at this level), so parallel calls on one connection can mix logs. Logs and sampling requests also appear as notes on the tool's
+sequence lane, with the `ChatClient` call that answers a sampling request on an "MCP sampling" lane. The rest (`initialize`, `tools/list`, ...) is shown per
+connection in the **MCP connections** panel, with the server's name, version, protocol and tools.
 
 ## RAG and memory
 

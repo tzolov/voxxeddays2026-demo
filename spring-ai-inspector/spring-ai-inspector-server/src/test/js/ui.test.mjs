@@ -9,7 +9,8 @@ import { readFileSync } from 'node:fs';
 import { state } from '../../main/resources/static/js/state.js';
 import { handle } from '../../main/resources/static/js/model.js';
 import { ADAPTERS, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
-import { diffTools, renderCall, renderItems } from '../../main/resources/static/js/render/cards.js';
+import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
+import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
@@ -111,6 +112,66 @@ test('MCP tools show their connection and get a lane per MCP connection', () => 
 	assert.match(html, /<span class="pill mcp" title="MCP connection: poet-server\nserver: mcp-server-voxxeddays-2026 0\.0\.1\ntool: getTemperature">MCP · poet-server<\/span>/);
 	const tools = buildSequence(run).lanes.filter((l) => l.kind === 'tool').map((l) => [l.label, l.sub]);
 	assert.deepEqual(tools, [['poet-server', 'MCP · mcp-server-voxxeddays-2026'], ['Tools', '']]);
+});
+
+test('MCP messages: the handshake belongs to the connection, the rest to the MCP tool run the starter attributed', () => {
+	const conn = 'poet-server';
+	const events = fixture('tools');
+	const runId = events[0].runId; const callId = events[1].callId; const toolId = events[6].toolId;
+	const msg = (seq, direction, kind, method, id, body, extra = {}) => ({ type: 'mcp-message', runId, seq, ts: Math.round(seq * 100),
+		connection: conn, direction, kind, method, id, payload: { jsonrpc: '2.0', id, ...body }, ...extra });
+	const at = (seq, e) => ({ ...e, runId, seq, ts: Math.round(seq * 100) });
+	const handshake = [
+		// Older recordings carry the payload as a JSON string.
+		{ ...msg(2.1, 'out', 'request', 'initialize', 0, {}), payload: JSON.stringify({ method: 'initialize', params: { protocolVersion: '2025-06-18' } }) },
+		msg(2.2, 'in', 'response', 'initialize', 0, { result: { protocolVersion: '2025-06-18', serverInfo: { name: 'mcp-server-voxxeddays-2026', version: '0.0.1' } } }),
+		msg(2.3, 'out', 'request', 'tools/list', 1, {}),
+		msg(2.4, 'in', 'response', 'tools/list', 1, { result: { tools: [{ name: 'hello' }, { name: 'getTemperature' }] } }),
+	];
+	// Posted in the background: these may arrive after the nested call and the tool's end.
+	const duringTool = [
+		msg(7.1, 'out', 'request', 'tools/call', 2, { params: { name: 'getTemperature', arguments: {} } }, { toolId }),
+		at(7.4, { type: 'client-request', callId: 'sampling-call', parentId: callId, parentInferred: true, messages: [{ role: 'user', text: 'Write a poem' }] }),
+		at(7.5, { type: 'client-response', callId: 'sampling-call', generations: [{ role: 'assistant', text: 'A poem' }] }),
+		msg(7.2, 'in', 'notification', 'notifications/message', undefined, { params: { level: 'info', data: 'Start sampling' } }, { toolId }),
+		msg(7.3, 'in', 'request', 'sampling/createMessage', 0, { params: { messages: [{ role: 'user', content: { type: 'text', text: 'Write a poem' } }] } }, { toolId }),
+		msg(7.6, 'out', 'response', 'sampling/createMessage', 0, { result: { content: { type: 'text', text: 'A poem' } } }, { toolId }),
+	];
+	const late = [msg(8.5, 'in', 'response', 'tools/call', 2, { result: { content: [{ type: 'text', text: '12°C' }] } }, { toolId })];
+	let tagged = false;
+	const tag = (e) => (e.type === 'tool-start' && !tagged && (tagged = true) ? { ...e, mcp: { connection: conn, server: 'mcp-server-voxxeddays-2026', tool: 'getTemperature' } } : e);
+	[...events.slice(0, 2), ...handshake, ...events.slice(2, 7).map(tag), ...duringTool, events[7], ...late, ...events.slice(8)]
+		.forEach(handle);
+	const run = [...state.runs.values()][0];
+	const tool = run.tools.get(toolId);
+
+	assert.deepEqual(tool.mcp.map((m) => `${m.kind} ${m.method}`), ['request tools/call', 'notification notifications/message',
+		'request sampling/createMessage', 'response sampling/createMessage', 'response tools/call']);
+	assert.deepEqual(run.mcp.get(conn).map((m) => m.method), ['initialize', 'initialize', 'tools/list', 'tools/list']);
+
+	const panel = renderMcpPanel(run);
+	assert.match(panel, /mcp-server-voxxeddays-2026 0\.0\.1/);
+	assert.match(panel, /protocol 2025-06-18/);
+	assert.match(panel, /2 tools/);
+	const card = renderTool(tool);
+	assert.match(card, /5 MCP msgs/);
+	assert.match(card, /info: Start sampling/);
+	assert.match(card, /<b>tools\/call ✓<\/b><span class="muted">#2<\/span>\s*<span class="mcp-sum">12°C<\/span>/);
+
+	const { lanes, msgs } = buildSequence(run);
+	const note = msgs.find((m) => m.note === 'info: Start sampling');
+	assert.ok(note && note.seq < tool.end.seq, 'notes stay inside the tool run');
+	assert.ok(lanes.some((l) => l.label === 'MCP sampling' && l.sub === 'for poet-server'));
+	assert.ok(!lanes.some((l) => l.label === 'Sub-agent'));
+});
+
+test('an MCP tool without a connection name is still drawn on an MCP lane, named like its badge', () => {
+	let first = true;
+	fixture('tools').map((e) => e.type === 'tool-start' && first && !(first = false) ? { ...e, mcp: { server: 'weather-mcp' } } : e).forEach(handle);
+	const run = [...state.runs.values()][0];
+
+	assert.match(renderCall(topCalls(run)[0], true), />MCP · weather-mcp<\/span>/);
+	assert.ok(buildSequence(run).lanes.some((l) => l.kind === 'tool' && l.label === 'weather-mcp' && l.sub === 'MCP · weather-mcp'));
 });
 
 test('tools that pass through the advisors stay visible after them', () => {

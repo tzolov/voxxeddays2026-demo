@@ -40,13 +40,6 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
         </dependency>
-		<!-- Spring AI Inspector instrumentation: every demo reports to a running inspector, transitively -->
-		<dependency>
-			<groupId>org.springaicommunity</groupId>
-			<artifactId>spring-ai-inspector-starter</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
-		</dependency>
-
     </dependencies>
 
     <build>

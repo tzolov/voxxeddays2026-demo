@@ -44,11 +44,11 @@ class InspectorMcpToolNamePostProcessorTest {
 				tool("poeticWeatherForecast"));
 
 		assertThat(name).isEqualTo("poeticWeatherForecast");
-		assertThat(this.origins.get(name)).containsEntry("connection", "poet-server")
+		assertThat(this.origins.get(name, null)).containsEntry("connection", "poet-server")
 			.containsEntry("server", "mcp-server-voxxeddays-2026")
 			.containsEntry("serverVersion", "0.0.1")
 			.containsEntry("tool", "poeticWeatherForecast");
-		assertThat(this.origins.get("someLocalTool")).isNull();
+		assertThat(this.origins.get("someLocalTool", null)).isNull();
 	}
 
 	@Test
@@ -61,7 +61,21 @@ class InspectorMcpToolNamePostProcessorTest {
 				tool("hello"));
 
 		// Async clients have no title: the connection comes from the client name.
-		assertThat(this.origins.get("poet_hello")).containsEntry("connection", "poet-server").containsEntry("tool", "hello");
+		assertThat(this.origins.get("poet_hello", null)).containsEntry("connection", "poet-server").containsEntry("tool", "hello");
+	}
+
+	@Test
+	void usesTheConnectionNameItsMessagesAreReportedUnder() {
+		// The transport names are known: a connection named with " - ", or a client info changed by a customizer.
+		this.origins.addConnection("poet - server");
+		McpToolNamePrefixGenerator generator = (McpToolNamePrefixGenerator) this.postProcessor
+			.postProcessAfterInitialization(new DefaultMcpToolNamePrefixGenerator(), "generator");
+
+		generator.prefixedToolName(
+				connection(McpSchema.Implementation.builder("spring-ai-mcp-client - poet - server", "1.0.0").build()),
+				tool("hello"));
+
+		assertThat(this.origins.get("hello", null)).containsEntry("connection", "poet - server");
 	}
 
 	@Test

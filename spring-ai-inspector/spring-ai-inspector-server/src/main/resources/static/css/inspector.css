@@ -297,3 +297,15 @@ details.fold[open] > summary::before { content: "▾ "; }
 	.tok-row > :nth-child(2), .tok-row > :nth-child(5), .tok-row > :nth-child(6) { display: none; }
 	.tokens.pinned { margin-inline: -1rem; padding-inline: 1rem; }
 }
+
+/* ---------- MCP messages ---------- */
+.mcp-msgs { display: flex; flex-direction: column; gap: .1rem; margin-top: .3rem; }
+details.mcp-msg { margin-top: 0; }
+details.mcp-msg > summary { display: flex; gap: .45rem; align-items: baseline; color: var(--text); min-width: 0; }
+details.mcp-msg .mcp-dir { color: var(--system); font-size: .75rem; white-space: nowrap; min-width: 4.2rem; }
+details.mcp-msg.response .mcp-dir, details.mcp-msg.response b { color: var(--muted); }
+details.mcp-msg.err b { color: var(--removed); }
+details.mcp-msg .muted { color: var(--muted); }
+details.mcp-msg .mcp-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+details.mcp-msg pre { margin: .25rem 0 .4rem; max-height: 16rem; overflow: auto; }
+.mcp-panel { margin: -.5rem 0 1rem; }
