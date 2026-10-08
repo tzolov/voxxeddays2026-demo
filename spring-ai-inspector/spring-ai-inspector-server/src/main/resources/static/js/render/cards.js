@@ -1,5 +1,5 @@
 import { adapterOf, normResponse, providerLabel, usageOf } from '../providers.js';
-import { renderMcpMessages } from './mcp.js';
+import { mcpName, renderMcpMessages } from './mcp.js';
 import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
@@ -17,7 +17,7 @@ export function renderTool(tool) {
 	const st = tool.start; const end = tool.end;
 	const args = parseJson(st.arguments);
 	let summary = `<span class="chev">▸</span><span class="num">⚙</span><span class="fn">${esc(st.name)}</span>
-		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(st.mcp.connection || st.mcp.server || 'MCP')}</span>`
+		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(mcpName(st.mcp))}</span>`
 		: st.toolType ? `<span class="pill">${esc(st.toolType)}</span>` : ''}<span class="oneline">${esc(oneLine(st.arguments, 80))}</span><span class="arrow">→</span>`;
 	if (!end) summary += '<span class="spinner"></span><span class="right-meta">running…</span>';
 	else if (end.error) summary += `<span class="pill err">${esc(oneLine(end.error, 60))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;

@@ -1,4 +1,4 @@
-import { esc, fmtMs, highlightJson, isOpen, oneLine, parseJson } from '../util.js';
+import { esc, fmtMs, highlightJson, isOpen, oneLine, parseJson, recordedTs } from '../util.js';
 
 // ---------------------------------------------------------------- MCP messages
 // JSON-RPC messages of the app's MCP client connections, reported by the starter's transport
@@ -8,6 +8,9 @@ import { esc, fmtMs, highlightJson, isOpen, oneLine, parseJson } from '../util.j
 
 // Parsed payloads, kept off the events so exports stay as recorded.
 const parsed = new WeakMap();
+
+/** What an MCP tool's badge and sequence lane are called: its connection, else its server. */
+export const mcpName = (mcp) => mcp.connection || mcp.server || 'MCP';
 
 /** The JSON-RPC message, parsed once (older recordings carry it as a string). */
 export function payloadOf(m) {
@@ -62,7 +65,7 @@ export function renderMcpMessages(msgs) {
 			<span class="mcp-dir" title="${m.direction === 'out' ? 'client to server' : 'server to client'}">${m.direction === 'out' ? '→ server' : '← server'}</span>
 			<b>${esc(mcpLabel(m))}</b>${m.id != null ? `<span class="muted">#${esc(m.id)}</span>` : ''}
 			<span class="mcp-sum">${esc(mcpSummary(m))}</span>
-			${req ? `<span class="right-meta">${fmtMs(m.ts - req.ts)}</span>` : ''}</summary>
+			${req ? `<span class="right-meta">${fmtMs(recordedTs(m) - recordedTs(req))}</span>` : ''}</summary>
 			<pre class="json">${payloadOf(m) ? highlightJson(payloadOf(m)) : esc(m.payload ?? '')}</pre></details>`;
 	}).join('')}</div>`;
 }

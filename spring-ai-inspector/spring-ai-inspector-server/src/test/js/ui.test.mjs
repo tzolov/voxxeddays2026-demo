@@ -114,21 +114,23 @@ test('MCP tools show their connection and get a lane per MCP connection', () => 
 	assert.deepEqual(tools, [['poet-server', 'MCP · mcp-server-voxxeddays-2026'], ['Tools', '']]);
 });
 
-test('MCP messages: the handshake belongs to the connection, the rest to the MCP tool run the starter attributed', () => {
+// A run where an MCP tool's server logs, asks the client to sample (answered by a nested ChatClient
+// call), logs again and returns; MCP messages are posted in the background, so some arrive late.
+function mcpToolRunEvents() {
 	const conn = 'poet-server';
 	const events = fixture('tools');
 	const runId = events[0].runId; const callId = events[1].callId; const toolId = events[6].toolId;
-	const msg = (seq, direction, kind, method, id, body, extra = {}) => ({ type: 'mcp-message', runId, seq, ts: Math.round(seq * 100),
+	const base = events[6].ts - 700; // timestamps on the fixture's timeline: seq 7 is the tool's start
+	const msg = (seq, direction, kind, method, id, body, extra = {}) => ({ type: 'mcp-message', runId, seq, ts: base + Math.round(seq * 100),
 		connection: conn, direction, kind, method, id, payload: { jsonrpc: '2.0', id, ...body }, ...extra });
-	const at = (seq, e) => ({ ...e, runId, seq, ts: Math.round(seq * 100) });
+	const at = (seq, e) => ({ ...e, runId, seq, ts: base + Math.round(seq * 100) });
 	const handshake = [
 		// Older recordings carry the payload as a JSON string.
 		{ ...msg(2.1, 'out', 'request', 'initialize', 0, {}), payload: JSON.stringify({ method: 'initialize', params: { protocolVersion: '2025-06-18' } }) },
 		msg(2.2, 'in', 'response', 'initialize', 0, { result: { protocolVersion: '2025-06-18', serverInfo: { name: 'mcp-server-voxxeddays-2026', version: '0.0.1' } } }),
 		msg(2.3, 'out', 'request', 'tools/list', 1, {}),
 		msg(2.4, 'in', 'response', 'tools/list', 1, { result: { tools: [{ name: 'hello' }, { name: 'getTemperature' }] } }),
-	];
-	// Posted in the background: these may arrive after the nested call and the tool's end.
+	].map((e) => ({ ...e, ts: events[1].ts }));
 	const duringTool = [
 		msg(7.1, 'out', 'request', 'tools/call', 2, { params: { name: 'getTemperature', arguments: {} } }, { toolId }),
 		at(7.4, { type: 'client-request', callId: 'sampling-call', parentId: callId, parentInferred: true, messages: [{ role: 'user', text: 'Write a poem' }] }),
@@ -137,16 +139,22 @@ test('MCP messages: the handshake belongs to the connection, the rest to the MCP
 		msg(7.3, 'in', 'request', 'sampling/createMessage', 0, { params: { messages: [{ role: 'user', content: { type: 'text', text: 'Write a poem' } }] } }, { toolId }),
 		msg(7.6, 'out', 'response', 'sampling/createMessage', 0, { result: { content: { type: 'text', text: 'A poem' } } }, { toolId }),
 	];
-	const late = [msg(8.5, 'in', 'response', 'tools/call', 2, { result: { content: [{ type: 'text', text: '12°C' }] } }, { toolId })];
+	// Arriving after the tool's end: a log recorded after the sampling call, and the tools/call result.
+	const late = [msg(8.4, 'in', 'notification', 'notifications/message', undefined, { params: { level: 'info', data: 'Done' } }, { toolId, ts: base + 760 }),
+		msg(8.5, 'in', 'response', 'tools/call', 2, { result: { content: [{ type: 'text', text: '12°C' }] } }, { toolId, ts: base + 790 })];
 	let tagged = false;
 	const tag = (e) => (e.type === 'tool-start' && !tagged && (tagged = true) ? { ...e, mcp: { connection: conn, server: 'mcp-server-voxxeddays-2026', tool: 'getTemperature' } } : e);
-	[...events.slice(0, 2), ...handshake, ...events.slice(2, 7).map(tag), ...duringTool, events[7], ...late, ...events.slice(8)]
-		.forEach(handle);
+	return { conn, toolId, events: [...events.slice(0, 2), ...handshake, ...events.slice(2, 7).map(tag), ...duringTool, events[7], ...late, ...events.slice(8)] };
+}
+
+test('MCP messages: the handshake belongs to the connection, the rest to the MCP tool run the starter attributed', () => {
+	const { conn, toolId, events } = mcpToolRunEvents();
+	events.forEach(handle);
 	const run = [...state.runs.values()][0];
 	const tool = run.tools.get(toolId);
 
 	assert.deepEqual(tool.mcp.map((m) => `${m.kind} ${m.method}`), ['request tools/call', 'notification notifications/message',
-		'request sampling/createMessage', 'response sampling/createMessage', 'response tools/call']);
+		'request sampling/createMessage', 'response sampling/createMessage', 'notification notifications/message', 'response tools/call']);
 	assert.deepEqual(run.mcp.get(conn).map((m) => m.method), ['initialize', 'initialize', 'tools/list', 'tools/list']);
 
 	const panel = renderMcpPanel(run);
@@ -154,15 +162,27 @@ test('MCP messages: the handshake belongs to the connection, the rest to the MCP
 	assert.match(panel, /protocol 2025-06-18/);
 	assert.match(panel, /2 tools/);
 	const card = renderTool(tool);
-	assert.match(card, /5 MCP msgs/);
+	assert.match(card, /6 MCP msgs/);
 	assert.match(card, /info: Start sampling/);
 	assert.match(card, /<b>tools\/call ✓<\/b><span class="muted">#2<\/span>\s*<span class="mcp-sum">12°C<\/span>/);
 
+	// Notes are placed by when they were recorded: before and after the sampling call, inside the tool run.
 	const { lanes, msgs } = buildSequence(run);
-	const note = msgs.find((m) => m.note === 'info: Start sampling');
-	assert.ok(note && note.seq < tool.end.seq, 'notes stay inside the tool run');
+	const sampling = run.calls.get('sampling-call');
+	const before = msgs.find((m) => m.note === 'info: Start sampling'); const after = msgs.find((m) => m.note === 'info: Done');
+	assert.ok(before.seq > tool.start.seq && before.seq < sampling.req.seq, 'the first log comes before the sampling call');
+	assert.ok(after.seq > sampling.resp.seq && after.seq < tool.end.seq, 'the late log comes after it, still inside the tool run');
 	assert.ok(lanes.some((l) => l.label === 'MCP sampling' && l.sub === 'for poet-server'));
 	assert.ok(!lanes.some((l) => l.label === 'Sub-agent'));
+});
+
+test('a replayed MCP run keeps its sampling lane and its MCP response times', () => {
+	// Replay feeds every event at replay time, in recorded order, keeping the recorded time apart.
+	mcpToolRunEvents().events.forEach((e, i) => handle({ ...e, ts: 9_000_000_000_000 + i * 1000, recordedTs: e.ts }));
+	const run = [...state.runs.values()][0];
+
+	assert.ok(buildSequence(run).lanes.some((l) => l.label === 'MCP sampling'));
+	assert.match(renderTool([...run.tools.values()][0]), /sampling\/createMessage ✓<\/b><span class="muted">#0<\/span>\s*<span class="mcp-sum">A poem<\/span>\s*<span class="right-meta">30 ms<\/span>/);
 });
 
 test('an MCP tool without a connection name is still drawn on an MCP lane, named like its badge', () => {
@@ -326,6 +346,28 @@ test('answers fold to a one-line preview and remember being opened', () => {
 	assert.match(thinking, /thinking · hidden \(signature only\)/);
 	assert.doesNotMatch(thinking, /msg assistant/);
 	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', toolCalls: [{ name: 'weather', arguments: '{}' }] }, 'k'), /<details/);
+});
+
+test('a long systemOne state is folded to its first lines', () => {
+	const available_tools = Array.from({ length: 30 }, (_, i) => ({ name: 'tool' + i, does: 'does thing ' + i }));
+	const w = wire('typesafe', '/v1/systemone', { model: 'jev-latest', state: { user_request: 'shops open now', available_tools },
+		questions: { best_tool: { type: 'choice', instructions: 'x' } } }, JSON.stringify({ answers: {} }));
+
+	const html = renderWire(w);
+	assert.match(html, /<details class="s1-state" data-key="s1-state:w1" >/);
+	assert.match(html, /state · 125 lines · 2,055 chars/);
+	const preview = html.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1];
+	assert.match(preview, /user_request/);
+	assert.match(preview, /does thing 0/); // the first entry
+	assert.doesNotMatch(preview, /tool1/);
+	assert.match(html, /tool29/); // the full state is there when opened
+	// A few lines holding a long string are folded too, with long preview lines cut.
+	const long = renderWire(wire('typesafe', '/v1/systemone', { state: { user_request: 'x'.repeat(3000) }, questions: {} }, '{}'));
+	assert.match(long, /<details class="s1-state"/);
+	assert.match(long.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1], /x{100,}…/);
+	assert.doesNotMatch(long.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1], /x{200}/);
+	// A short state stays as it is.
+	assert.doesNotMatch(renderWire(wire('typesafe', '/v1/systemone', { state: { a: 1 }, questions: {} }, '{}')), /s1-state/);
 });
 
 test('noul answers say which way Jev leans, with a band for close calls', () => {

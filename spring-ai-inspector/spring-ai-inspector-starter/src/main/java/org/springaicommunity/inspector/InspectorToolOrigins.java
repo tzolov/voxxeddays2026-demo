@@ -2,6 +2,7 @@ package org.springaicommunity.inspector;
 
 import java.util.Deque;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,13 +58,29 @@ public class InspectorToolOrigins {
 				(name, old) -> old != null && old.exact() ? old : new Origin(origin, description, false));
 	}
 
+	/** An origin as tool runs report it. */
+	static Map<String, Object> origin(String connection, String server, String serverVersion, String tool) {
+		Map<String, Object> origin = new LinkedHashMap<>();
+		origin.put("connection", connection);
+		if (server != null) {
+			origin.put("server", server);
+			origin.put("serverVersion", serverVersion);
+		}
+		origin.put("tool", tool);
+		return origin;
+	}
+
 	/**
 	 * The origin of the tool with this name and description, or null for a tool of the
-	 * application itself.
+	 * application itself. An MCP tool without a description matches by name alone: Spring
+	 * AI describes such a tool by its name ("poetic Weather Forecast").
 	 */
 	Map<String, Object> get(String toolName, String description) {
 		Origin origin = toolName == null ? null : this.origins.get(toolName);
-		return origin == null || !text(origin.description()).equals(text(description)) ? null : origin.origin();
+		if (origin == null) {
+			return null;
+		}
+		return text(origin.description()).isEmpty() || origin.description().equals(description) ? origin.origin() : null;
 	}
 
 	private static String text(String text) {
@@ -98,31 +115,29 @@ public class InspectorToolOrigins {
 		return latest == null ? null : latest.toolId();
 	}
 
-	/** The tool run sending a tools/call: the running tool of that name that has not called yet. */
+	/**
+	 * The tool run sending a tools/call: the earliest started running tool of that name
+	 * that has not called yet, or null when no tracked run matches (the call then belongs to
+	 * the connection, not to some other tool run).
+	 */
 	String toolCall(String connection, Object id, String tool) {
-		String toolId = null;
 		Deque<OpenTool> runs = this.openTools.get(connection);
-		if (runs != null) {
-			for (Iterator<OpenTool> it = runs.iterator(); it.hasNext() && toolId == null;) {
-				OpenTool run = it.next();
-				if (run.tool() != null && run.tool().equals(tool) && run.called().compareAndSet(false, true)) {
-					toolId = run.toolId();
-				}
+		if (runs == null) {
+			return null;
+		}
+		for (Iterator<OpenTool> it = runs.descendingIterator(); it.hasNext();) {
+			OpenTool run = it.next();
+			if (run.tool() != null && run.tool().equals(tool) && run.called().compareAndSet(false, true)) {
+				this.calls.put(connection + "|" + id, run.toolId());
+				return run.toolId();
 			}
 		}
-		if (toolId == null) {
-			toolId = current(connection);
-		}
-		if (toolId != null) {
-			this.calls.put(connection + "|" + id, toolId);
-		}
-		return toolId;
+		return null;
 	}
 
-	/** The tool run whose tools/call this response answers. */
+	/** The tool run whose tools/call this response answers, or null. */
 	String toolCallResponse(String connection, Object id) {
-		String toolId = this.calls.remove(connection + "|" + id);
-		return toolId != null ? toolId : current(connection);
+		return this.calls.remove(connection + "|" + id);
 	}
 
 }

@@ -10,6 +10,9 @@ export const MAX_ORDER = 2147483647;
 export const fmtOrder = (o) => o == null ? '' : o < -2e9 ? `HIGHEST+${o + MAX_ORDER + 1}` : o > 2e9 ? `LOWEST−${MAX_ORDER - o}` : String(o);
 export const oneLine =(s, n = 90) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
 
+/** When an event happened: a replay feeds events at replay time, keeping the recorded time here. */
+export const recordedTs = (ev) => ev.recordedTs ?? ev.ts;
+
 export function parseJson(text) {
 	if (text == null || text === '') return null;
 	try { return JSON.parse(text); } catch { return undefined; }

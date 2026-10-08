@@ -135,11 +135,29 @@ export function renderSystemOneCriteria(q) {
 	return `<div class="s1-crit">${Object.entries(c).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(criterionText(v))}`).join('<br>')}</div>`;
 }
 
+// The state can be long (e.g. every tool a tool search chooses from): folded to its first
+// lines by default, like system prompts.
+const STATE_PREVIEW_LINES = 6;
+const STATE_FOLD_CHARS = 1_500; // folded also when a few lines hold long strings
+const STATE_PREVIEW_LINE_CHARS = 160;
+
+function renderSystemOneState(wire, st) {
+	if (st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length === 1 && typeof st.text === 'string') {
+		return `<div class="msg user"><div class="role">state · text</div><div class="text">${esc(st.text)}</div></div>`;
+	}
+	const json = JSON.stringify(st ?? null, null, 2);
+	const lines = json.split('\n');
+	if (lines.length <= STATE_PREVIEW_LINES + 2 && json.length <= STATE_FOLD_CHARS) return `<pre class="json">${highlightJson(json)}</pre>`;
+	const preview = lines.slice(0, STATE_PREVIEW_LINES).map((l) => (l.length > STATE_PREVIEW_LINE_CHARS ? l.slice(0, STATE_PREVIEW_LINE_CHARS) + '…' : l));
+	const key = 's1-state:' + wire.id;
+	return `<details class="s1-state" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>
+		<span class="s1-state-label"><span class="chev">▸</span>state · ${fmtNum(lines.length)} lines · ${fmtNum(json.length)} chars</span>
+		<pre class="json s1-state-preview">${highlightJson(preview.join('\n'))}${lines.length > STATE_PREVIEW_LINES ? '\n  …' : ''}</pre></summary>
+		<pre class="json">${highlightJson(json)}</pre></details>`;
+}
+
 export function renderSystemOne(wire, nreq, nresp) {
-	const st = nreq.state;
-	const stateHtml = st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length === 1 && typeof st.text === 'string'
-		? `<div class="msg user"><div class="role">state · text</div><div class="text">${esc(st.text)}</div></div>`
-		: `<pre class="json">${highlightJson(st ?? null)}</pre>`;
+	const stateHtml = renderSystemOneState(wire, nreq.state);
 	let answersNote = '';
 	if (wire.resp && nresp && nresp.error) answersNote = `<div class="notice err">${esc(nresp.error)}</div>`;
 	const params = [nreq.params.model && `<span class="pill">model: <b>${esc(nreq.params.model)}</b></span>`,

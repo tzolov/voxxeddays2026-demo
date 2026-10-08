@@ -1,10 +1,10 @@
 import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { fmtCompact, wireModelKey } from './tokens.js';
 import { isJevWire } from './cards.js';
-import { mcpSummary } from './mcp.js';
+import { mcpName, mcpSummary } from './mcp.js';
 import { memoryStoreKey } from './memory.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
-import { esc, fmtMs, oneLine } from '../util.js';
+import { esc, fmtMs, oneLine, recordedTs } from '../util.js';
 
 // ---------------------------------------------------------------- sequence view
 // Flattens a run (plus remote calls linked to its tools) into lanes and messages ordered
@@ -24,7 +24,7 @@ export function buildSequence(run) {
 	};
 	// MCP tools get a lane per MCP connection (named like their card's badge); the application's own tools share one.
 	const toolLane = (r, t) => {
-		const mcp = t.start.mcp; const name = mcp && (mcp.connection || mcp.server || 'MCP');
+		const mcp = t.start.mcp; const name = mcp && mcpName(mcp);
 		return mcp ? lane(r, 'tool', 'mcp:' + name, name, `MCP · ${mcp.server || 'server'}`) : lane(r, 'tool', '', 'Tools', '');
 	};
 	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
@@ -87,12 +87,16 @@ export function buildSequence(run) {
 				const t = it.ref; const to = toolLane(r, t);
 				msgs.push({ seq: t.start.seq, ts: t.start.ts, from: adv, to, kind: 'tool', label: `${t.start.name}(${oneLine(t.start.arguments, 40)})`, path: [...path, 'tool:' + t.id] });
 				for (const rc of t.remoteCalls || []) walkCall(rc.run, rc, to, [...path, 'tool:' + t.id], 0);
-				// What the MCP server sends while the tool runs (logs, progress, sampling requests): notes on its lane,
-				// kept inside the tool's run (MCP messages are posted in the background, so may arrive after its end).
-				for (const m of (t.mcp || []).filter((x) => x.direction === 'in' && x.kind !== 'response')) {
-					msgs.push({ seq: t.end ? Math.min(m.seq, t.end.seq - 0.5) : m.seq, ts: m.ts, from: to, to, kind: 'tool', path: [...path, 'tool:' + t.id],
+				// What the MCP server sends while the tool runs (logs, progress, sampling requests): notes on its lane.
+				// MCP messages are posted in the background, so their seq can come late (even after the tool's end):
+				// each note goes right after the last of the tool's start and its nested calls' steps recorded before it.
+				const anchors = [t.start, ...items.filter((i) => i.kind === 'call' && i.ref.req.seq > t.start.seq && (!t.end || i.ref.req.seq < t.end.seq))
+					.flatMap((i) => [i.ref.req, i.ref.resp].filter(Boolean))].sort((a, b) => recordedTs(a) - recordedTs(b) || a.seq - b.seq);
+				(t.mcp || []).filter((x) => x.direction === 'in' && x.kind !== 'response').forEach((m, i) => {
+					const anchor = anchors.filter((a) => recordedTs(a) <= recordedTs(m)).pop() ?? t.start;
+					msgs.push({ seq: anchor.seq + 0.001 * (i + 1), ts: m.ts, from: to, to, kind: 'tool', path: [...path, 'tool:' + t.id],
 						note: oneLine(m.method === 'notifications/message' ? mcpSummary(m) : m.method.replace(/^notifications\//, ''), 36) });
-				}
+				});
 				if (t.end) {
 					msgs.push({ seq: t.end.seq, ts: t.end.ts, from: to, to: adv, ret: true, kind: 'tool', path: [...path, 'tool:' + t.id],
 						label: `${t.end.error ? '⚠ ' + oneLine(t.end.error, 40) : oneLine(t.end.result, 40)} · ${fmtMs(t.end.durationMs)}` });
@@ -106,9 +110,12 @@ export function buildSequence(run) {
 				const byTool = tools.find((t) => t.start.seq < nested.req.seq && (!t.end || t.end.seq > nested.req.seq));
 				// A call made while the MCP server's sampling request is open serves that request
 				// (by time: MCP messages are posted in the background, so their seq may come later).
-				const open = (byTool?.mcp || []).filter((m) => m.method === 'sampling/createMessage' && m.ts <= nested.req.ts);
-				const sampling = open.some((req) => !byTool.mcp.some((x) => x.kind === 'response' && x.direction === 'out' && x.id === req.id && x.ts < nested.req.ts));
-				if (byTool) walkCall(r, nested, toolLane(r, byTool), path, 0, byTool.start.name, null, sampling ? byTool.start.mcp?.connection ?? '' : null);
+				const at = recordedTs(nested.req);
+				const open = (byTool?.mcp || []).filter((m) => m.method === 'sampling/createMessage' && m.kind === 'request' && m.direction === 'in'
+					&& recordedTs(m) <= at);
+				const sampling = open.some((req) => !byTool.mcp.some((x) => x.kind === 'response' && x.direction === 'out' && x.id === req.id
+					&& recordedTs(x) < at));
+				if (byTool) walkCall(r, nested, toolLane(r, byTool), path, 0, byTool.start.name, null, sampling ? mcpName(byTool.start.mcp ?? {}) : null);
 				else walkCall(r, nested, adv, path, nest + 1, null, adv);
 			}
 			else if (it.kind === 'ingest') {

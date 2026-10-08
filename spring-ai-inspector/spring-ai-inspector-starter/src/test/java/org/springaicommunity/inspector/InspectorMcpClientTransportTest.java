@@ -127,6 +127,26 @@ class InspectorMcpClientTransportTest {
 	}
 
 	@Test
+	void parallelRunsOfOneToolGetTheirOwnCallsAndAnUnknownCallBelongsToTheConnection() {
+		FakeTransport fake = new FakeTransport();
+		InspectorMcpClientTransport transport = new InspectorMcpClientTransport("poet-server", fake, this.client,
+				this.origins);
+		transport.connect(m -> m).block();
+		this.origins.started("first", Map.of("connection", "poet-server", "tool", "getTemperature"));
+		this.origins.started("second", Map.of("connection", "poet-server", "tool", "getTemperature"));
+
+		transport.sendMessage(toolsCall(1, "getTemperature")).block(); // the run that started first calls first
+		transport.sendMessage(toolsCall(2, "getTemperature")).block();
+		transport.sendMessage(toolsCall(3, "untrackedTool")).block();
+		fake.receive(new McpSchema.JSONRPCResponse("2.0", 2, Map.of(), null));
+		fake.receive(new McpSchema.JSONRPCResponse("2.0", 1, Map.of(), null));
+		fake.receive(new McpSchema.JSONRPCResponse("2.0", 3, Map.of(), null));
+
+		assertThat(mcpEvents()).extracting(e -> e.get("toolId"))
+			.containsExactly("first", "second", null, "second", "first", null);
+	}
+
+	@Test
 	void learnsWhereToolsComeFromFromToolsList() {
 		FakeTransport fake = new FakeTransport();
 		InspectorMcpClientTransport transport = new InspectorMcpClientTransport("poet-server", fake, this.client,
@@ -147,6 +167,8 @@ class InspectorMcpClientTransportTest {
 		assertThat(this.origins.get("poetic_weather", "Poem")).isEqualTo(Map.of("connection", "poet-server", "server",
 				"mcp-server-voxxeddays-2026", "serverVersion", "0.0.1", "tool", "poetic-weather"));
 		assertThat(this.origins.get("poetic_weather", "a local tool of the same name")).isNull();
+		// And under its own name, for providers that keep it (e.g. with noPrefix()).
+		assertThat(this.origins.get("poetic-weather", "Poem")).containsEntry("tool", "poetic-weather");
 		assertThat(this.origins.get("hello", "Greeting")).containsEntry("connection", "other");
 	}
 

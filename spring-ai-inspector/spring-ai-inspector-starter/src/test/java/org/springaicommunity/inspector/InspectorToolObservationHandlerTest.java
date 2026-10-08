@@ -66,6 +66,16 @@ class InspectorToolObservationHandlerTest {
 	}
 
 	@Test
+	void anMcpToolWithoutDescriptionMatchesByName() {
+		// Spring AI describes such a tool by its name, so its description never matches the server's (none).
+		this.origins.put("airbnb_search", Map.of("connection", "airbnb", "tool", "airbnb_search"), null);
+
+		observe("call-1").stop();
+
+		assertThat(this.events.get(0)).containsKey("mcp");
+	}
+
+	@Test
 	void aLocalToolHasNoMcpOrigin() {
 		observe("call-1").stop();
 

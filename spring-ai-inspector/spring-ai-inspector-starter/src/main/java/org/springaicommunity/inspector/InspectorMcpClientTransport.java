@@ -52,8 +52,13 @@ public class InspectorMcpClientTransport implements McpClientTransport {
 	/** {@code <direction>|<id>} of a request in flight to its method, to name its response. */
 	private final Map<String, String> pending = new ConcurrentHashMap<>();
 
+	/** Requests in flight beyond this are forgotten (e.g. never answered after a timeout). */
+	private static final int MAX_PENDING = 1_000;
+
 	/** The server's name and version, from its initialize response. */
-	private volatile Map<String, Object> serverInfo = Map.of();
+	private volatile String serverName;
+
+	private volatile String serverVersion;
 
 	public InspectorMcpClientTransport(String connection, McpClientTransport delegate, InspectorClient client,
 			InspectorToolOrigins origins) {
@@ -124,6 +129,9 @@ public class InspectorMcpClientTransport implements McpClientTransport {
 			event.put("kind", "request");
 			method = request.method();
 			id = request.id();
+			if (this.pending.size() >= MAX_PENDING) {
+				this.pending.clear();
+			}
 			this.pending.put(direction + "|" + id, method);
 		}
 		else if (message instanceof McpSchema.JSONRPCNotification notification) {
@@ -154,22 +162,20 @@ public class InspectorMcpClientTransport implements McpClientTransport {
 		}
 		Map<?, ?> map = result instanceof Map<?, ?> m ? m : (result != null ? this.json.convertToMap(result) : Map.of());
 		if ("initialize".equals(method) && map.get("serverInfo") instanceof Map<?, ?> server) {
-			Map<String, Object> info = new LinkedHashMap<>();
-			info.put("server", server.get("name"));
-			info.put("serverVersion", server.get("version"));
-			this.serverInfo = info;
+			this.serverName = server.get("name") instanceof String name ? name : null;
+			this.serverVersion = server.get("version") instanceof String version ? version : null;
 		}
 		if ("tools/list".equals(method) && map.get("tools") instanceof List<?> tools) {
 			for (Object t : tools) {
 				if (t instanceof Map<?, ?> tool && tool.get("name") instanceof String name) {
-					Map<String, Object> origin = new LinkedHashMap<>();
-					origin.put("connection", this.connection);
-					origin.putAll(this.serverInfo);
-					origin.put("tool", name);
-					// Named like the default generator does (e.g. get-weather -> get_weather); clashes it
-					// renames are recorded by the generator itself.
-					this.origins.putListed(McpToolUtils.format(name), origin,
-							tool.get("description") instanceof String d ? d : null);
+					Map<String, Object> origin = InspectorToolOrigins.origin(this.connection, this.serverName,
+							this.serverVersion, name);
+					String description = tool.get("description") instanceof String d ? d : null;
+					// Under the name the default generator gives it (e.g. get-weather -> get_weather) and
+					// under its own (e.g. a provider using noPrefix()); renamed clashes are recorded by
+					// the generator itself.
+					this.origins.putListed(McpToolUtils.format(name), origin, description);
+					this.origins.putListed(name, origin, description);
 				}
 			}
 		}

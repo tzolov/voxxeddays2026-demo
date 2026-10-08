@@ -309,3 +309,10 @@ details.mcp-msg .muted { color: var(--muted); }
 details.mcp-msg .mcp-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 details.mcp-msg pre { margin: .25rem 0 .4rem; max-height: 16rem; overflow: auto; }
 .mcp-panel { margin: -.5rem 0 1rem; }
+
+/* ---------- systemOne state: folded to its first lines ---------- */
+details.s1-state > summary { list-style: none; cursor: pointer; }
+details.s1-state > summary::-webkit-details-marker { display: none; }
+details.s1-state .s1-state-label { display: flex; gap: .4rem; align-items: center; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .25rem; }
+details.s1-state[open] .s1-state-preview { display: none; }
+details.s1-state .s1-state-preview { opacity: .85; }

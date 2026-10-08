@@ -1,7 +1,6 @@
 package org.springaicommunity.inspector;
 
 import java.lang.reflect.Modifier;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -60,15 +59,10 @@ public class InspectorMcpToolNamePostProcessor implements BeanPostProcessor {
 	}
 
 	static Map<String, Object> origin(McpConnectionInfo info, McpSchema.Tool tool, Set<String> connections) {
-		Map<String, Object> origin = new LinkedHashMap<>();
-		origin.put("connection", connectionName(info.clientInfo(), connections));
 		McpSchema.InitializeResult init = info.initializeResult();
-		if (init != null && init.serverInfo() != null) {
-			origin.put("server", init.serverInfo().name());
-			origin.put("serverVersion", init.serverInfo().version());
-		}
-		origin.put("tool", tool.name());
-		return origin;
+		McpSchema.Implementation server = init != null ? init.serverInfo() : null;
+		return InspectorToolOrigins.origin(connectionName(info.clientInfo(), connections),
+				server != null ? server.name() : null, server != null ? server.version() : null, tool.name());
 	}
 
 	/**
