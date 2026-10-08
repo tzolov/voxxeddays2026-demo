@@ -1,7 +1,8 @@
-import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
+import { inputCount, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { fmtCompact, wireModelKey } from './tokens.js';
 import { embeddingTotals, foldKey, foldKind, isEmbeddingWire, isJevWire } from './cards.js';
 import { mcpName, mcpSummary } from './mcp.js';
+import { isAdvisorOnly, modelCallOutcome, modelOf, providerOf, usageOfModelCall } from './models.js';
 import { memoryStoreKey } from './memory.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine, recordedTs } from '../util.js';
@@ -29,8 +30,8 @@ export function buildSequence(run) {
 	};
 	const app = lane(run, 'app', '', run.app.split(' · ')[1] || 'App', run.app.split(' · ')[0]);
 	// Token totals per model/systemOne lane, shown under the lane head.
-	const addTokens = (laneKey, w) => {
-		const u = usageOf(w); const l = lanes.get(laneKey);
+	const addTokens = (laneKey, w, u = usageOf(w)) => {
+		const l = lanes.get(laneKey);
 		if (!u || !l) return;
 		l.tokens = { input: (l.tokens?.input || 0) + (u.input || 0), output: (l.tokens?.output || 0) + (u.output || 0) };
 	};
@@ -44,6 +45,7 @@ export function buildSequence(run) {
 
 	function wireReturn(w) {
 		if (!w.resp) return '…';
+		if (w.inProcess && w.resp.error) return `⚠ ${oneLine(w.resp.error, 40)}`;
 		if (w.resp.error || w.resp.status >= 400) return `HTTP ${w.resp.status}`;
 		const r = normResponse(w);
 		if (r?.answers) return systemOneHighlights(r).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'answers';
@@ -56,6 +58,25 @@ export function buildSequence(run) {
 		const tools = items.filter((i) => i.kind === 'tool').map((i) => i.ref);
 		// A round-trip with no recorded response ends with its call (e.g. the call failed), or runs on while the call does.
 		const openEnd = call?.resp ? call.resp.seq : Infinity;
+		// Who made a step: the tool running at that moment (from its lane), else the advisors.
+		const toolAt = (seq) => tools.find((t) => t.start.seq < seq && (!t.end || t.end.seq > seq));
+		const fromAt = (seq) => {
+			const t = toolAt(seq);
+			return t ? toolLane(r, t) : adv;
+		};
+		// Vector store adds and searches: the embedding calls made meanwhile are the store's own,
+		// drawn from its lane, inside the operation. Reported when they start (open until they end),
+		// or, in older recordings, only once done, with their duration.
+		const vectorLane = (ev) => lane(r, 'vector', '', 'Vector store', ev.store);
+		const ops = [...items.filter((i) => i.kind === 'ingest').map((i) => i.ref), ...(call ? call.searches : [])]
+			.map((ev) => ({ ev, start: ev.start ? recordedTs(ev.start) : recordedTs(ev) - (ev.durationMs || 0),
+				end: ev.pending ? Infinity : recordedTs(ev), wires: [] }));
+		const opOf = (w) => ops.find((o) => recordedTs(w.req) >= o.start && recordedTs(w.req) <= o.end);
+		for (const it of items) if (isEmbeddingWire(it)) opOf(it.ref)?.wires.push(it.ref);
+		const sourceOf = (w) => {
+			const op = isEmbeddingWire({ kind: 'wire', ref: w }) && opOf(w);
+			return op ? vectorLane(op.ev) : fromAt(w.req.seq);
+		};
 		for (let i = 0; i < items.length;) {
 			let j = i;
 			// Fold runs of systemOne checks or embedding calls to the same lane into one exchange.
@@ -68,9 +89,10 @@ export function buildSequence(run) {
 				const done = group.every((w) => w.resp) ? group.reduce((a, w) => (w.resp.seq > a.resp.seq ? w : a)) : null;
 				group.forEach((w) => addTokens(to, w));
 				const totals = fold === 'embed' ? embeddingTotals(group) : null;
-				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, kind, path: gpath,
+				const src = sourceOf(group[0]);
+				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: src, to, kind, path: gpath,
 					label: totals ? `${group.length} embedding calls · ${totals.inputs} inputs` : `${group.length} systemOne checks` });
-				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: adv, ret: true, kind, path: gpath,
+				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: src, ret: true, kind, path: gpath,
 					label: totals ? `${totals.vectors} vectors · ${fmtMs(totals.ms ?? 0)}`
 						: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
 				acts.push({ lane: to, from: group[0].req.seq, to: done ? done.resp.seq : openEnd, nest: 0 });
@@ -83,11 +105,28 @@ export function buildSequence(run) {
 				addTokens(to, w);
 				const kind = to.includes('|jev|') ? 'jev' : 'model';
 				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions`
-					: isEmbeddingWire(it) ? `#${w.num} · embed ${req?.inputs.length ?? '?'} input${req?.inputs.length === 1 ? '' : 's'}`
+					: isEmbeddingWire(it) ? `#${w.num} · embed ${inputCount(req) ?? '?'} input${inputCount(req) === 1 ? '' : 's'}${w.inProcess ? ' · no HTTP' : ''}`
 					: `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
-				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: adv, to, label, kind, path: [...path, 'wire:' + w.id] });
-				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: adv, ret: true, kind, label: wireReturn(w), path: [...path, 'wire:' + w.id] });
+				const src = sourceOf(w);
+				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: src, to, label, kind, path: [...path, 'wire:' + w.id] });
+				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: src, ret: true, kind, label: wireReturn(w), path: [...path, 'wire:' + w.id] });
 				acts.push({ lane: to, from: w.req.seq, to: w.resp ? w.resp.seq : openEnd, nest: 0 });
+			}
+			else if (it.kind === 'model' && isAdvisorOnly(it.ref)) {
+				// A model call without HTTP (e.g. a model running in the JVM): as the advisor saw it.
+				const mc = it.ref; const model = modelOf(mc);
+				const to = lane(r, 'model', model, model, providerOf(mc));
+				addTokens(to, null, usageOfModelCall(mc));
+				const p = [...path, 'model:' + mc.id];
+				msgs.push({ seq: mc.req.seq, ts: mc.req.ts, from: adv, to, kind: 'model', path: p,
+					label: `#${mc.num} · ${(mc.req.messages || []).length} msgs · no HTTP` });
+				if (mc.resp) {
+					const { toolCalls, finish } = modelCallOutcome(mc);
+					const calls = toolCalls.map((t) => t.name);
+					msgs.push({ seq: mc.resp.seq, ts: mc.resp.ts, from: to, to: adv, ret: true, kind: 'model', path: p,
+						label: `${mc.resp.error ? '⚠ error' : calls.length ? 'tool_use ' + calls.join(', ') : finish || 'response'} · ${fmtMs(mc.resp.durationMs)}` });
+				}
+				acts.push({ lane: to, from: mc.req.seq, to: mc.resp ? mc.resp.seq : openEnd, nest: 0 });
 			}
 			else if (it.kind === 'tool') {
 				const t = it.ref; const to = toolLane(r, t);
@@ -113,7 +152,7 @@ export function buildSequence(run) {
 				const nested = it.ref;
 				// A nested call made while a tool runs is a sub-agent called by that tool;
 				// otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
-				const byTool = tools.find((t) => t.start.seq < nested.req.seq && (!t.end || t.end.seq > nested.req.seq));
+				const byTool = toolAt(nested.req.seq);
 				// A call made while the MCP server's sampling request is open serves that request
 				// (by time: MCP messages are posted in the background, so their seq may come later).
 				const at = recordedTs(nested.req);
@@ -124,17 +163,23 @@ export function buildSequence(run) {
 				if (byTool) walkCall(r, nested, toolLane(r, byTool), path, 0, byTool.start.name, null, sampling ? mcpName(byTool.start.mcp ?? {}) : null);
 				else walkCall(r, nested, adv, path, nest + 1, null, adv);
 			}
-			else if (it.kind === 'ingest') {
-				const to = lane(r, 'vector', '', 'Vector store', it.ref.store);
-				msgs.push({ seq: it.ref.seq, ts: it.ref.ts, from: adv, to, kind: 'vector', label: `ingest ${it.ref.count} chunks · ${fmtMs(it.ref.durationMs)}`, path });
-			}
 		}
-		for (const sr of call ? call.searches : []) {
-			const to = lane(r, 'vector', '', 'Vector store', sr.store);
-			msgs.push({ seq: sr.seq, ts: sr.ts, from: adv, to, kind: 'vector', label: `🔎 ${oneLine(sr.query, 40)}`, path });
-			msgs.push({ seq: sr.seq + 0.5, ts: sr.ts, from: to, to: adv, ret: true, kind: 'vector', path,
-				label: `${sr.results.length} hits${sr.results.length ? ' · best ' + Math.max(...sr.results.map((x) => x.score || 0)).toFixed(2) : ''} · ${fmtMs(sr.durationMs)}` });
-			acts.push({ lane: to, from: sr.seq, to: sr.seq + 0.5, nest: 0 });
+		// Each add or search: a request before the embedding calls it made, a return when it reported.
+		for (const { ev, wires } of ops) {
+			const to = vectorLane(ev);
+			const first = Math.min(...wires.map((w) => w.req.seq));
+			const at = ev.start ? ev.start.seq : (Number.isFinite(first) ? first : ev.seq) - 0.5;
+			const from = fromAt(at);
+			const search = ev.query !== undefined;
+			msgs.push({ seq: at, ts: ev.start?.ts ?? ev.ts, from, to, kind: 'vector', path,
+				label: search ? `🔎 ${oneLine(ev.query, 40)}` : `ingest ${ev.count} chunks` });
+			if (!ev.pending) {
+				msgs.push({ seq: ev.seq, ts: ev.ts, from: to, to: from, ret: true, kind: 'vector', path,
+					label: ev.error ? `⚠ ${oneLine(ev.error, 40)}`
+						: search ? `${ev.results.length} hits${ev.results.length ? ' · best ' + Math.max(...ev.results.map((x) => x.score || 0)).toFixed(2) : ''} · ${fmtMs(ev.durationMs)}`
+						: `${ev.count} stored · ${fmtMs(ev.durationMs)}` });
+			}
+			acts.push({ lane: to, from: at, to: ev.pending ? openEnd : ev.seq, nest: 0 });
 		}
 	}
 

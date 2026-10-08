@@ -1,5 +1,6 @@
-import { adapterOf, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
+import { adapterOf, inputCount, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { mcpName, renderMcpMessages } from './mcp.js';
+import { isAdvisorOnly, renderModelCall, usageOfModelCall } from './models.js';
 import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
@@ -41,6 +42,7 @@ export function renderItem(it, latest) {
 	if (it.kind === 'wire') return renderWire(it.ref);
 	if (it.kind === 'tool') return renderTool(it.ref);
 	if (it.kind === 'ingest') return renderIngest(it.ref);
+	if (it.kind === 'model') return isAdvisorOnly(it.ref) ? renderModelCall(it.ref) : ''; // else its HTTP round-trip shows it
 	return renderCall(it.ref, it === latest);
 }
 
@@ -83,7 +85,7 @@ function renderJevGroup(group) {
  */
 export function embeddingTotals(group) {
 	const answered = group.filter((w) => w.resp);
-	return { inputs: group.reduce((n, w) => n + (normRequest(w)?.inputs.length ?? 0), 0),
+	return { inputs: group.reduce((n, w) => n + (inputCount(normRequest(w)) ?? 0), 0),
 		vectors: group.reduce((n, w) => n + (normResponse(w)?.vectors ?? 0), 0),
 		tokens: group.reduce((n, w) => n + (usageOf(w)?.input ?? 0), 0),
 		ms: answered.length ? Math.max(...answered.map((w) => recordedTs(w.resp))) - Math.min(...group.map((w) => recordedTs(w.req))) : null };
@@ -125,10 +127,19 @@ export function step(num, title, hint, content) {
 	return `<div class="step"><div class="step-num">${num}</div><div class="step-title">${title}${hint ? `<span class="hint">${hint}</span>` : ''}</div>${content}</div>`;
 }
 
+/** A call's own round-trips: HTTP ones, in-process ones (e.g. embeddings in the JVM), and model calls without HTTP. */
+export function callTrips(call) {
+	const wires = call.items.filter((i) => i.kind === 'wire').map((i) => i.ref);
+	return { wires, noHttp: call.modelCalls.filter(isAdvisorOnly), count: wires.length + call.modelCalls.filter(isAdvisorOnly).length };
+}
+
 export function callTokens(call) {
 	let input = 0, output = 0;
-	for (const w of call.wires) { const u = usageOf(w); if (u) { input += u.input || 0; output += u.output || 0; } }
-	if (!call.wires.length && call.resp?.usage) { input = call.resp.usage.input || 0; output = call.resp.usage.output || 0; }
+	const { wires, noHttp, count } = callTrips(call);
+	for (const u of [...wires.map(usageOf), ...noHttp.map(usageOfModelCall)]) {
+		if (u) { input += u.input || 0; output += u.output || 0; }
+	}
+	if (!count && call.resp?.usage) { input = call.resp.usage.input || 0; output = call.resp.usage.output || 0; }
 	return { input, output };
 }
 
@@ -143,7 +154,8 @@ export function renderCall(call, isLatest) {
 	else {
 		meta = fmtMs(call.resp.durationMs);
 		if (tokens.input || tokens.output) meta += ` · ${fmtNum(tokens.input)} in · ${fmtNum(tokens.output)} out`;
-		if (call.wires.length) meta += ` · ${call.wires.length} round-trip${call.wires.length === 1 ? '' : 's'}`;
+		const trips = callTrips(call).count;
+		if (trips) meta += ` · ${trips} round-trip${trips === 1 ? '' : 's'}`;
 	}
 
 	const summary = `<span class="chev">▸</span><span class="kind">${call.parent ? 'nested ChatClient' : 'ChatClient'}</span>${call.inferred ? '<span class="tag muted" title="parent inferred by timing: the call ran on another thread">inferred</span>' : ''}
@@ -231,6 +243,10 @@ export function wireHint(call) {
 	const tools = call.items.filter((i) => i.kind === 'tool').length;
 	const parts = [];
 	if (call.wires.length) parts.push(`${call.wires.length} HTTP round-trip${call.wires.length === 1 ? '' : 's'}`);
+	const noHttp = call.modelCalls.filter(isAdvisorOnly).length;
+	if (noHttp) parts.push(`${noHttp} model call${noHttp === 1 ? '' : 's'} without HTTP`);
+	const embeds = call.items.filter((i) => i.kind === 'wire' && i.ref.inProcess).length;
+	if (embeds) parts.push(`${embeds} embedding call${embeds === 1 ? '' : 's'} without HTTP`);
 	if (tools) parts.push(`${tools} tool run${tools === 1 ? '' : 's'}`);
 	return parts.join(' · ');
 }

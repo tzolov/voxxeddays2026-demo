@@ -42,39 +42,78 @@ public class InspectorVectorStorePostProcessor implements BeanPostProcessor {
 		factory.addAdvice((MethodInterceptor) invocation -> {
 			String method = invocation.getMethod().getName();
 			Object[] args = invocation.getArguments();
-			if ("similaritySearch".equals(method) && args.length == 1 && args[0] instanceof SearchRequest request) {
-				long start = System.currentTimeMillis();
-				Object result = invocation.proceed();
-				reportSearch(storeName, request, result, System.currentTimeMillis() - start);
-				return result;
-			}
-			// The default similaritySearch(String) calls the target directly, bypassing the
-			// proxy, so it is reported here (with the defaults it searches with).
-			if ("similaritySearch".equals(method) && args.length == 1 && args[0] instanceof String query) {
-				long start = System.currentTimeMillis();
-				Object result = invocation.proceed();
-				reportSearch(storeName, SearchRequest.builder().query(query).build(), result,
-						System.currentTimeMillis() - start);
-				return result;
-			}
+			SearchRequest search = !"similaritySearch".equals(method) || args.length != 1 ? null
+					: args[0] instanceof SearchRequest request ? request
+					// The default similaritySearch(String) calls the target directly, bypassing the
+					// proxy, so it is reported here (with the defaults it searches with).
+					: args[0] instanceof String query ? SearchRequest.builder().query(query).build() : null;
 			// add, and the DocumentWriter entry points accept/write that delegate to it.
-			if (("add".equals(method) || "accept".equals(method) || "write".equals(method)) && args.length == 1
-					&& args[0] instanceof List<?> documents) {
-				long start = System.currentTimeMillis();
+			List<?> documents = ("add".equals(method) || "accept".equals(method) || "write".equals(method))
+					&& args.length == 1 && args[0] instanceof List<?> list ? list : null;
+			if (search == null && documents == null) {
+				return invocation.proceed();
+			}
+			// Reported when it starts too, so the inspector can draw the embedding calls the store
+			// makes meanwhile inside the operation as they happen.
+			String opId = UUID.randomUUID().toString().substring(0, 8);
+			String clientCallId = InspectorAdvisor.currentCallId();
+			reportStart(opId, storeName, search, documents, clientCallId);
+			long start = System.currentTimeMillis();
+			try {
 				Object result = invocation.proceed();
-				reportAdd(storeName, documents, System.currentTimeMillis() - start);
+				long durationMs = System.currentTimeMillis() - start;
+				if (search != null) {
+					reportSearch(opId, storeName, search, result, durationMs, clientCallId, null);
+				}
+				else {
+					reportAdd(opId, storeName, documents, durationMs, clientCallId, null);
+				}
 				return result;
 			}
-			return invocation.proceed();
+			catch (Throwable ex) { // any failure ends the operation, so it isn't shown as running for good
+				long durationMs = System.currentTimeMillis() - start;
+				String error = ex.getClass().getSimpleName() + ": " + ex.getMessage();
+				if (search != null) {
+					reportSearch(opId, storeName, search, List.of(), durationMs, clientCallId, error);
+				}
+				else {
+					reportAdd(opId, storeName, documents, durationMs, clientCallId, error);
+				}
+				throw ex;
+			}
 		});
 		return factory.getProxy();
 	}
 
-	private void reportSearch(String store, SearchRequest request, Object result, long durationMs) {
-		String clientCallId = InspectorAdvisor.currentCallId();
+	/** A search or an add starting: the ChatClient call making it, if any, and what it is. */
+	private void reportStart(String opId, String store, SearchRequest search, List<?> documents, String clientCallId) {
+		this.client.ifAvailable(c -> c.send("vector-start", () -> {
+			Map<String, Object> event = new LinkedHashMap<>();
+			event.put("opId", opId);
+			event.put("op", search != null ? "search" : "add");
+			event.put("clientCallId", clientCallId);
+			event.put("store", store);
+			if (search != null) {
+				event.put("query", search.getQuery());
+			}
+			else {
+				event.put("count", documents.size());
+			}
+			return event;
+		}));
+	}
+
+	private void reportSearch(String opId, String store, SearchRequest request, Object result, long durationMs,
+			String clientCallId, String error) {
 		String thread = Thread.currentThread().getName();
-		this.client.ifAvailable(c -> c.send("vector-search", () -> searchEvent(store, request, result, durationMs,
-				clientCallId, thread)));
+		this.client.ifAvailable(c -> c.send("vector-search", () -> {
+			Map<String, Object> event = searchEvent(store, request, result, durationMs, clientCallId, thread);
+			event.put("opId", opId);
+			if (error != null) {
+				event.put("error", error);
+			}
+			return event;
+		}));
 	}
 
 	private static Map<String, Object> searchEvent(String store, SearchRequest request, Object result, long durationMs,
@@ -93,9 +132,16 @@ public class InspectorVectorStorePostProcessor implements BeanPostProcessor {
 		return event;
 	}
 
-	private void reportAdd(String store, List<?> documents, long durationMs) {
+	/** {@code clientCallId}: the ChatClient call adding them, if any (e.g. a tool search indexing its tools). */
+	private void reportAdd(String opId, String store, List<?> documents, long durationMs, String clientCallId,
+			String error) {
 		this.client.ifAvailable(c -> c.send("vector-add", () -> {
 			Map<String, Object> event = new LinkedHashMap<>();
+			event.put("opId", opId);
+			if (error != null) {
+				event.put("error", error);
+			}
+			event.put("clientCallId", clientCallId);
 			event.put("store", store);
 			event.put("count", documents.size());
 			event.put("durationMs", durationMs);

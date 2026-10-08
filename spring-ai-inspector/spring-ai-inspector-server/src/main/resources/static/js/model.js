@@ -1,5 +1,7 @@
 import { replay, stopReplay } from './replay.js';
+import { adapterOf } from './providers.js';
 import { ensureRun, state } from './state.js';
+import { recordedTs } from './util.js';
 
 // ---------------------------------------------------------------- event handling
 export function handle(ev) {
@@ -14,6 +16,7 @@ export function handle(ev) {
 		case 'run-start':
 			run.app = ev.app || run.app; run.model = ev.model; run.started = ev.ts; run.pid = ev.pid;
 			run.imported = ev.imported; run.replayOf = ev.replayOf;
+			run.routed = new Set(ev.routed || []); // providers whose calls are recorded on the wire
 			if (state.follow) state.selected = run.id;
 			break;
 		case 'run-end':
@@ -34,10 +37,12 @@ export function handle(ev) {
 			break;
 		}
 		case 'model-request': {
-			const mc = { id: ev.callId, req: ev, resp: null };
-			run.modelCalls.set(mc.id, mc);
+			// The advisor right before the model saw this call; shown as a round-trip of its own
+			// when no HTTP traffic was recorded for it (see render/models.js).
 			const call = run.calls.get(ev.parentId);
-			if (call) call.modelCalls.push(mc);
+			const mc = { id: ev.callId, req: ev, resp: null, call, run, num: (run.modelCallCount = (run.modelCallCount || 0) + 1) };
+			run.modelCalls.set(mc.id, mc);
+			if (call) { call.modelCalls.push(mc); call.items.push({ kind: 'model', ref: mc }); }
 			break;
 		}
 		case 'model-response': {
@@ -50,6 +55,9 @@ export function handle(ev) {
 				prev: run.wireList[run.wireList.length - 1] || null };
 			run.wires.set(wire.id, wire);
 			run.wireList.push(wire);
+			// The model call this HTTP round-trip served (stamped by the proxy): that call isn't shown again.
+			if (ev.modelCallId) (run.wiredModelCalls ||= new Set()).add(ev.modelCallId);
+			if (adapterOf(wire)?.kind === 'embedding') (run.httpEmbeddings ||= []).push(wire);
 			const call = run.calls.get(ev.clientCallId);
 			if (call) { call.items.push({ kind: 'wire', ref: wire }); call.wires.push(wire); }
 			else run.items.push({ kind: 'wire', ref: wire });
@@ -84,20 +92,79 @@ export function handle(ev) {
 			}
 			break;
 		}
+		case 'embedding-call': {
+			// An embedding call seen at the model bean. Remote models' calls are on the wire already;
+			// one with no HTTP round-trip recorded meanwhile (a model running in the JVM, e.g. jinfer)
+			// becomes a round-trip of its own, so it is shown, counted and drawn like the others.
+			if (run.routed?.has(ev.provider) || onTheWire(run, ev)) break;
+			const wire = inProcessEmbedding(run, ev, recordedTs(ev) - (ev.durationMs || 0));
+			run.wires.set(wire.id, wire);
+			run.wireList.push(wire);
+			const call = run.calls.get(ev.clientCallId);
+			(call ? call.items : run.items).push({ kind: 'wire', ref: wire });
+			break;
+		}
+		case 'vector-start': {
+			// A search or an add starting: shown (open) right away, completed by its end event, so
+			// the embedding calls the store makes meanwhile are drawn inside it as they happen.
+			const call = run.calls.get(ev.clientCallId);
+			const op = { ...ev, pending: true, start: ev, ...(ev.op === 'search' ? { results: [] } : {}) };
+			(run.vectorOps ||= new Map()).set(ev.opId, op);
+			if (ev.op === 'search') (call ? call.searches : (run.searches ||= [])).push(op);
+			else (call ? call.items : run.items).push({ kind: 'ingest', ref: op });
+			break;
+		}
 		case 'vector-search': {
+			const started = ev.opId && run.vectorOps?.get(ev.opId);
+			if (started) { Object.assign(started, ev, { pending: false }); break; }
 			const call = run.calls.get(ev.clientCallId);
 			(call ? call.searches : (run.searches ||= [])).push(ev);
 			break;
 		}
-		case 'vector-add':
-			run.items.push({ kind: 'ingest', ref: ev });
+		case 'vector-add': {
+			const started = ev.opId && run.vectorOps?.get(ev.opId);
+			if (started) { Object.assign(started, ev, { pending: false }); break; }
+			// Inside the ChatClient call that added them (e.g. a tool search indexing its tools), else the run's.
+			const call = run.calls.get(ev.clientCallId);
+			(call ? call.items : run.items).push({ kind: 'ingest', ref: ev });
 			break;
+		}
 		case 'memory-snapshot': {
 			const call = run.calls.get(ev.clientCallId);
 			if (call) { call.memory[ev.phase] = ev.stores; call.memory[ev.phase + 'Seq'] = ev.seq; }
 			break;
 		}
 	}
+}
+
+/**
+ * Whether an embedding call was recorded on the wire already: an HTTP embedding round-trip of
+ * the same provider and ChatClient call, made while it ran. Only recent round-trips are looked at.
+ */
+function onTheWire(run, ev) {
+	const end = recordedTs(ev); const start = end - (ev.durationMs || 0);
+	const http = run.httpEmbeddings || [];
+	for (let i = http.length - 1; i >= 0; i--) {
+		const w = http[i]; const at = recordedTs(w.req);
+		if (at < start) break;
+		if (at <= end && w.req.provider === ev.provider && (w.req.clientCallId ?? null) === (ev.clientCallId ?? null)) return true;
+	}
+	return false;
+}
+
+/** A round-trip for an embedding call made in the JVM, normalized like an HTTP one (see providers.js). */
+function inProcessEmbedding(run, ev, start) {
+	const replayed = ev.recordedTs != null;
+	const wire = { id: 'emb:' + ev.embeddingId, inProcess: true, num: run.wireList.length + 1, prev: run.wireList[run.wireList.length - 1] || null,
+		req: { provider: ev.provider, method: '', path: '/embeddings', url: '', headers: {}, seq: ev.seq - 0.5,
+			ts: ev.ts - (ev.durationMs || 0), ...(replayed ? { recordedTs: start } : {}),
+			body: JSON.stringify({ model: ev.model, inputs: ev.inputs, sample: ev.sample }) },
+		resp: { seq: ev.seq, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
+			durationMs: ev.durationMs, headers: {}, body: JSON.stringify({ model: ev.model, vectors: ev.vectors, dimensions: ev.dimensions, usage: ev.usage, error: ev.error }) } };
+	wire._nreq = { params: { model: ev.model ?? undefined }, inputs: ev.sample || [], total: ev.inputs, system: null, tools: [], messages: [] };
+	wire._nresp = ev.error ? { error: ev.error }
+		: { model: ev.model, vectors: ev.vectors, dimensions: ev.dimensions, blocks: [], usage: ev.usage ? { input: ev.usage.input, output: 0 } : null };
+	return wire;
 }
 
 // A call in another JVM, linked by the server (by timing) to the tool call that was open

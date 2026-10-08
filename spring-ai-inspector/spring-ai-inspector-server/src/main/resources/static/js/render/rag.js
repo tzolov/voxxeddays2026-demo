@@ -2,6 +2,8 @@ import { esc, fmtMs, fmtNum, isOpen, oneLine } from '../util.js';
 
 // ---------------------------------------------------------------- RAG
 export function renderIngest(ev) {
+	if (ev.pending) return `<div class="notice info" style="margin-bottom:.6rem"><span class="spinner"></span> Ingesting <b>${fmtNum(ev.count)}</b> chunks into <b>${esc(ev.store)}</b>…</div>`;
+	if (ev.error) return `<div class="notice err" style="margin-bottom:.6rem">⤓ Ingesting <b>${fmtNum(ev.count)}</b> chunks into <b>${esc(ev.store)}</b> failed: ${esc(ev.error)}</div>`;
 	const sources = [...new Set((ev.sample || []).map((d) => d.metadata?.file_name || d.metadata?.source).filter(Boolean))];
 	return `<div class="notice info" style="margin-bottom:.6rem">⤓ Ingested <b>${fmtNum(ev.count)}</b> chunks into <b>${esc(ev.store)}</b>
 		${sources.length ? `from <span class="fn">${sources.map(esc).join(', ')}</span>` : ''} · ${fmtMs(ev.durationMs)}</div>`;
@@ -39,15 +41,17 @@ export function renderDoc(d, cls = '') {
 }
 
 export function renderSearch(sr, idx) {
-	const key = 'search:' + sr.searchId;
+	const key = 'search:' + (sr.opId ?? sr.searchId); // stable from the search's start to its end
 	const top = sr.results.length ? Math.max(...sr.results.map((r) => r.score || 0)) : null;
 	return `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary><span class="chev">▸</span>
 		<span class="num">🔎</span><span class="fn">“${esc(oneLine(sr.query, 90))}”</span>
-		<span class="pill">${sr.results.length} hit${sr.results.length === 1 ? '' : 's'}</span>
+		${sr.pending ? '<span class="spinner"></span><span class="right-meta">searching…</span>'
+			: sr.error ? `<span class="pill err">${esc(oneLine(sr.error, 60))}</span>`
+			: `<span class="pill">${sr.results.length} hit${sr.results.length === 1 ? '' : 's'}</span>`}
 		${top != null ? `<span class="pill">best ${top.toFixed(3)}</span>` : ''}<span class="right-meta">${fmtMs(sr.durationMs)}</span></summary>
 		<div class="pane on">${sr.results.map((r) => `<div class="search-row"><div class="bar"><span style="width:${(Math.max(0, Math.min(1, r.score || 0)) * 100).toFixed(1)}%"></span></div>
 			<span class="val">${r.score != null ? Number(r.score).toFixed(3) : '–'}</span><span class="snip" title="${esc(r.text)}">${esc(oneLine(r.text, 140))}</span></div>`).join('')
-			|| '<div class="notice info">no results above the threshold</div>'}</div></details>`;
+			|| (sr.pending ? '' : '<div class="notice info">no results above the threshold</div>')}</div></details>`;
 }
 
 // What retrieval did for this call: configured stages, every vector search, and which

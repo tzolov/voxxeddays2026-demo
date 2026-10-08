@@ -11,6 +11,7 @@ import { handle } from '../../main/resources/static/js/model.js';
 import { ADAPTERS, adapterOf, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
+import { runTotals } from '../../main/resources/static/js/render/page.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
@@ -80,7 +81,10 @@ test('tools: tool runs sit between the round-trips that requested and consumed t
 	const [run] = load('tools');
 	const [call] = topCalls(run);
 
-	assert.deepEqual(call.items.map((i) => i.kind), ['wire', 'tool', 'tool', 'wire']);
+	assert.deepEqual(call.items.map((i) => i.kind).filter((k) => k !== 'model'), ['wire', 'tool', 'tool', 'wire']);
+	// The advisor's model calls are recorded on the wire here, so they aren't shown again.
+	assert.doesNotMatch(renderCall(call, true), /no HTTP/);
+	assert.equal(runTotals(run).trips, 2);
 	assert.ok(call.wires.every((w) => usageOf(w).input > 0));
 	assert.match(renderCall(call, true), /getTemperature/);
 
@@ -192,6 +196,166 @@ test('an MCP tool without a connection name is still drawn on an MCP lane, named
 
 	assert.match(renderCall(topCalls(run)[0], true), />MCP · weather-mcp<\/span>/);
 	assert.ok(buildSequence(run).lanes.some((l) => l.kind === 'tool' && l.label === 'weather-mcp' && l.sub === 'MCP · weather-mcp'));
+});
+
+test('a model making no HTTP calls (e.g. in the JVM) is shown from the advisor: cards, tokens, sequence', () => {
+	// The same run without its HTTP round-trips, as a jinfer model would leave it.
+	fixture('tools').filter((e) => !e.type.startsWith('wire-'))
+		.map((e) => (e.type === 'model-request' ? { ...e, options: { ...e.options, type: 'JinferChatOptions', model: 'LFM2.5-8B' } } : e))
+		.forEach(handle);
+	const run = [...state.runs.values()][0];
+	const [call] = topCalls(run);
+
+	const html = renderCall(call, true);
+	assert.equal((html.match(/ChatModel call · no HTTP/g) || []).length, 2);
+	assert.match(html, /<span class="pill" title="Seen by the advisor[^"]*">jinfer<\/span>/);
+	assert.match(html, /<span class="pill">claude-sonnet-4-6<\/span>/); // the model that answered
+	assert.match(html, /⚙ getTemperature/);
+	assert.match(html, /2 model calls without HTTP · 2 tool runs/);
+	assert.match(html, /1,565 in · 400 out · 2 round-trips/); // the call's own numbers include them too
+	assert.deepEqual(runTotals(run), { input: 1565, output: 400, trips: 2 });
+	// An unrelated HTTP round-trip during a model call (e.g. a systemOne check) doesn't hide it: the proxy
+	// stamps each round-trip with the model call it served, and this one served none.
+	const mc = [...run.modelCalls.values()][0];
+	handle({ type: 'wire-request', runId: run.id, seq: mc.req.seq + 0.1, ts: mc.req.ts + 1, wireId: 'jev', clientCallId: call.id,
+		provider: 'typesafe', method: 'POST', path: '/v1/systemone', url: 'u', headers: {}, body: '{}' });
+	assert.equal(runTotals(run).trips, 3);
+	assert.equal((renderCall(call, true).match(/ChatModel call · no HTTP/g) || []).length, 2);
+	// Every model with round-trips has a row, also the systemOne one reporting no usage (yet).
+	assert.deepEqual(tokensByModel(run).rows.map((r) => [r.provider, r.model, r.input, r.calls, r.reported]),
+		[['jinfer', 'claude-sonnet-4-6', 1565, 2, 2], ['typesafe', 'typesafe', 0, 1, 0]]);
+	const { lanes, msgs } = buildSequence(run);
+	assert.ok(lanes.some((l) => l.kind === 'model' && l.label === 'claude-sonnet-4-6' && l.sub === 'jinfer'));
+	assert.ok(msgs.some((m) => m.label === '#1 · 1 msgs · no HTTP'));
+	assert.ok(msgs.some((m) => /^tool_use getTemperature, getTemperature · /.test(m.label)));
+});
+
+test("a routed provider's model calls are never shown as without HTTP, even when one went unstamped", () => {
+	// Overlapping model calls can leave one without the proxy's stamp; its provider is routed, so it's on the wire.
+	fixture('tools').filter((e) => !e.type.startsWith('wire-'))
+		.map((e) => (e.type === 'run-start' ? { ...e, routed: ['anthropic'] } : e)).forEach(handle);
+	const run = [...state.runs.values()][0];
+
+	assert.doesNotMatch(renderCall(topCalls(run)[0], true), /no HTTP/);
+	assert.equal(runTotals(run).trips, 0);
+});
+
+test('a provider routed by a name of its own is recognized by its API path', () => {
+	assert.equal(adapterOf(wire('groq', '/openai/v1/chat/completions', { messages: [] }, '{}')), ADAPTERS.openai);
+	assert.equal(adapterOf(wire('groq', '/openai/v1/embeddings', { input: 'x' }, '{}')).kind, 'embedding');
+	assert.equal(adapterOf(wire('anthropic', '/v1/models', {}, '{}')), null); // a known provider's other endpoints stay raw
+});
+
+test('vector store adds and searches enclose the embedding calls they make, from whoever made them', () => {
+	// As 10-1 runs it: the first call indexes its tools (one embedding call per tool), then a tool search embeds its query.
+	let seq = 0; const ev = (e) => handle({ runId: 'ts', seq: ++seq, ...e });
+	const embed = (id, ts, input) => {
+		ev({ type: 'wire-request', ts, wireId: id, clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+			headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: [input] }) });
+		ev({ type: 'wire-response', ts: ts + 5, wireId: id, status: 200, durationMs: 5, headers: {}, body: JSON.stringify({ data: [{ embedding: [0, 1] }] }) });
+	};
+	ev({ type: 'run-start', ts: 1000, app: '10-1 · App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	['probe', 'weather', 'clothing', 'currentTime'].forEach((t, i) => embed('e' + i, 1010 + 10 * i, t));
+	ev({ type: 'vector-add', ts: 1050, clientCallId: 'c1', store: 'SimpleVectorStore', count: 3, durationMs: 45 });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	embed('q', 1110, 'tool to get the time');
+	ev({ type: 'vector-search', ts: 1130, clientCallId: 'c1', store: 'SimpleVectorStore', query: 'tool to get the time', results: [{ score: 0.8 }], durationMs: 30 });
+	ev({ type: 'tool-end', ts: 1140, toolId: 't1', result: '["currentTime"]', durationMs: 40 });
+	ev({ type: 'client-response', ts: 1200, callId: 'c1', generations: [{ role: 'assistant', text: 'ok' }] });
+	const run = state.runs.get('ts');
+	const call = topCalls(run)[0];
+
+	assert.deepEqual(call.items.filter((i) => i.kind === 'ingest').length, 1, 'the add belongs to the call that made it');
+	const { lanes, msgs } = buildSequence(run);
+	const name = (key) => lanes.find((l) => l.key === key).label;
+	const arrows = msgs.map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`);
+	assert.deepEqual(arrows.slice(1, 6), [
+		'Advisors → Vector store: ingest 3 chunks',
+		'Vector store → text-embedding-ada-002: 4 embedding calls · 4 inputs',
+		'text-embedding-ada-002 → Vector store: 4 vectors · 35 ms',
+		'Vector store → Advisors: 3 stored · 45 ms',
+		'Advisors → Tools: toolSearchTool({})']);
+	assert.deepEqual(arrows.slice(6, 10), [
+		'Tools → Vector store: 🔎 tool to get the time',
+		'Vector store → text-embedding-ada-002: #5 · embed 1 input',
+		'text-embedding-ada-002 → Vector store: 1 vector · 5 ms',
+		'Vector store → Tools: 1 hits · best 0.80 · 30 ms']);
+});
+
+test('a vector store add reported when it starts is drawn live: the diagram only grows', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'live', seq: ++seq, ...e });
+	const embed = (id, ts) => {
+		ev({ type: 'wire-request', ts, wireId: id, provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+			headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: ['chunk'] }) });
+		ev({ type: 'wire-response', ts: ts + 5, wireId: id, status: 200, durationMs: 5, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	};
+	const arrows = () => {
+		const { lanes, msgs } = buildSequence(state.runs.get('live'));
+		const name = (key) => lanes.find((l) => l.key === key).label;
+		return msgs.map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`);
+	};
+	ev({ type: 'run-start', ts: 1000, app: '05-rag · DemoApplication' });
+	ev({ type: 'vector-start', ts: 1000, opId: 'a1', op: 'add', store: 'SimpleVectorStore', count: 52 });
+	[0, 1, 2, 3].forEach((i) => embed('e' + i, 1010 + 10 * i));
+
+	const live = arrows();
+	assert.deepEqual(live, ['DemoApplication → Vector store: ingest 52 chunks',
+		'Vector store → text-embedding-ada-002: 4 embedding calls · 4 inputs', 'text-embedding-ada-002 → Vector store: 4 vectors · 35 ms']);
+	assert.match(renderItems(state.runs.get('live').items, null), /<span class="spinner"><\/span> Ingesting <b>52<\/b> chunks/);
+
+	ev({ type: 'vector-add', ts: 1060, opId: 'a1', store: 'SimpleVectorStore', count: 52, durationMs: 60 });
+	assert.deepEqual(arrows(), [...live, 'Vector store → DemoApplication: 52 stored · 60 ms']);
+	assert.match(renderItems(state.runs.get('live').items, null), /Ingested <b>52<\/b> chunks/);
+});
+
+test('an embedding model running in the JVM is shown from its embedding calls, and not twice for a remote one', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'jinfer', seq: ++seq, ...e });
+	const embed = (id, ts, n) => ev({ type: 'embedding-call', ts, embeddingId: id, clientCallId: 'c1', provider: 'jinfer', model: 'Qwen3-Embedding-0.6B',
+		inputs: n, sample: ['toolDescription: weather'], vectors: n, dimensions: 1024, durationMs: 50 });
+	ev({ type: 'run-start', ts: 1000, app: 'jinfer-tool-search-demo · App', routed: ['groq', 'openai'] });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	ev({ type: 'vector-start', ts: 1001, opId: 'a1', op: 'add', clientCallId: 'c1', store: 'SimpleVectorStore', count: 26 });
+	[0, 1, 2].forEach((i) => embed('e' + i, 1100 + 100 * i, 1));
+	ev({ type: 'vector-add', ts: 1400, opId: 'a1', clientCallId: 'c1', store: 'SimpleVectorStore', count: 26, durationMs: 399 });
+	const run = state.runs.get('jinfer');
+
+	const { lanes, msgs } = buildSequence(run);
+	const name = (key) => lanes.find((l) => l.key === key).label;
+	assert.deepEqual(msgs.slice(1).map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`), [
+		'Advisors → Vector store: ingest 26 chunks',
+		'Vector store → Qwen3-Embedding-0.6B: 3 embedding calls · 3 inputs',
+		'Qwen3-Embedding-0.6B → Vector store: 3 vectors · 250 ms',
+		'Vector store → Advisors: 26 stored · 399 ms']);
+	assert.ok(lanes.some((l) => l.label === 'Qwen3-Embedding-0.6B' && l.sub === 'jinfer'));
+	const html = renderCall(topCalls(run)[0], true);
+	assert.match(html, /EmbeddingModel call · no HTTP/);
+	assert.match(html, /3 embedding calls without HTTP/);
+	assert.equal(runTotals(run).trips, 3);
+
+	// An in-JVM embedding overlapping another provider's HTTP one is still shown.
+	ev({ type: 'wire-request', ts: 1500, wireId: 'other', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['y'] }) });
+	ev({ type: 'embedding-call', ts: 1520, embeddingId: 'tf', clientCallId: 'c1', provider: 'transformers', inputs: 1, vectors: 1, durationMs: 40 });
+	assert.equal(runTotals(run).trips, 5);
+	// The embedding model reports no token usage: it still has its row, with its trips and no numbers.
+	const embedRow = tokensByModel(run).rows.find((r) => r.model === 'Qwen3-Embedding-0.6B');
+	assert.deepEqual([embedRow.calls, embedRow.reported], [3, 0]);
+	assert.match(renderTokenPanel(run), /Qwen3-Embedding-0\.6B[\s\S]*?<span class="tok-num">–<\/span><span class="tok-num">–<\/span>\s*<span class="tok-extra">no token usage reported<\/span><span class="tok-num">3<\/span>/);
+	// A routed provider's embedding calls are on the wire (here under the route's name, groq): not added again.
+	ev({ type: 'embedding-call', ts: 1600, embeddingId: 'routed', clientCallId: 'c1', provider: 'openai', inputs: 1, vectors: 1, durationMs: 40 });
+	assert.equal(runTotals(run).trips, 5);
+	// A failed in-process embedding says so in the sequence.
+	ev({ type: 'embedding-call', ts: 1700, embeddingId: 'fail', clientCallId: 'c1', provider: 'jinfer', inputs: 1, durationMs: 5,
+		error: 'IllegalStateException: model not loaded' });
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '⚠ IllegalStateException: model not loaded'));
+	assert.equal(runTotals(run).trips, 6);
+	// A remote embedding model's call is on the wire already: its embedding-call event adds nothing.
+	ev({ type: 'wire-request', ts: 2000, wireId: 'w1', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['x'] }) });
+	ev({ type: 'wire-response', ts: 2040, wireId: 'w1', status: 200, durationMs: 40, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	ev({ type: 'embedding-call', ts: 2045, embeddingId: 'dup', clientCallId: 'c1', provider: 'openai', inputs: 1, vectors: 1, durationMs: 50 });
+	assert.equal(runTotals(run).trips, 7);
 });
 
 test('tools that pass through the advisors stay visible after them', () => {

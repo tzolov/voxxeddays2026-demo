@@ -219,10 +219,16 @@ export const EMBEDDINGS = {
 	},
 };
 
+/** How many texts an embedding request embeds (an in-process one only carries a sample of them). */
+export const inputCount = (nreq) => nreq?.total ?? nreq?.inputs.length;
+
 export function adapterOf(wire) {
-	const a = ADAPTERS[wire.req.provider];
-	if (a && a.matches(wire.req.path)) return a;
-	return EMBEDDINGS.providers.has(wire.req.provider) && EMBEDDINGS.matches(wire.req.path) ? EMBEDDINGS : null;
+	const { provider, path } = wire.req;
+	const a = ADAPTERS[provider];
+	if (a && a.matches(path)) return a;
+	if (EMBEDDINGS.matches(path) && (EMBEDDINGS.providers.has(provider) || !a)) return EMBEDDINGS;
+	// A provider routed by a name of its own (spring.ai.inspector.proxy.<name>): recognized by its API's path.
+	return a ? null : [...new Set(Object.values(ADAPTERS))].find((x) => x.matches(path)) ?? null;
 }
 
 export function normRequest(wire) {

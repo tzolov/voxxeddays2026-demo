@@ -7,13 +7,19 @@ import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.EnumerablePropertySource;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 
 /**
  * Detects a running Spring AI Inspector (see the {@code spring-ai-inspector} module) and, if one
@@ -30,6 +36,13 @@ import org.springframework.core.env.MapPropertySource;
  * {@code spring.ai.inspector.route.openai=always} also routes an OpenAI-compatible
  * endpoint whose base URL ends in the {@code /v1} segment, e.g. Amazon Bedrock mantle.
  *
+ * <p>Any other HTTP model provider can be routed too, by naming its base-url property:
+ * {@code spring.ai.inspector.proxy.<name>=<property>[,<property>...]}, e.g.
+ * {@code spring.ai.inspector.proxy.groq=spring.ai.openai.base-url}. The proxy forwards to
+ * that property's value; the inspector recognizes the wire format by the request path
+ * (OpenAI-compatible, Anthropic, Ollama). Models running in the JVM make no HTTP calls:
+ * they are shown from the advisor's model calls instead.
+ *
  * <p>The run id in the URL lets the inspector attribute every wire call to the demo
  * that made it. When the inspector is not running nothing changes and the demo talks to
  * the configured base-url as before.
@@ -40,6 +53,17 @@ import org.springframework.core.env.MapPropertySource;
 public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
 	static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
+
+	static final String PROXY_PREFIX = "spring.ai.inspector.proxy.";
+
+	/** e.g. spring.ai.anthropic.chat.options.model, spring.ai.jinfer.chat.model */
+	private static final Pattern CHAT_MODEL = Pattern.compile("spring\\.ai\\.([a-z0-9.-]+)\\.chat\\.(options\\.)?model");
+
+	/** The provider of a spring.ai property: spring.ai.openai.base-url -> openai. */
+	private static final Pattern PROPERTY_OWNER = Pattern.compile("spring\\.ai\\.([a-z0-9-]+)\\.");
+
+	/** The providers routed through the proxy, reported with the run (see InspectorAutoConfiguration). */
+	static final String ROUTED = "spring.ai.inspector.routed";
 
 	@Override
 	public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
@@ -83,8 +107,41 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		// whatever it pointed at before (api.typesafe.ai, a local Ollama serving Jev models, ...).
 		route(props, environment, url, proxy, "typesafe", "", "https://api.typesafe.ai", "spring.ai.typesafe.base-url");
 
+		// Other HTTP providers, routed on request: spring.ai.inspector.proxy.<name>=<base-url property>[,...]
+		for (String key : propertyNames(environment)) {
+			if (key.startsWith(PROXY_PREFIX) && key.length() > PROXY_PREFIX.length()) {
+				try {
+					routeOnRequest(props, environment, url, proxy, key);
+				}
+				catch (RuntimeException ex) {
+					// e.g. an unresolvable placeholder: that provider stays unrouted
+				}
+			}
+		}
+
 		// addFirst: overrides any base-url in application.properties.
 		environment.getPropertySources().addFirst(new MapPropertySource("spring-ai-inspector", props));
+	}
+
+	/** spring.ai.inspector.proxy.<name>=<base-url property>[,...]: routes that provider through the proxy. */
+	private static void routeOnRequest(Map<String, Object> props, ConfigurableEnvironment environment, String url,
+			String proxy, String key) {
+		String provider = key.substring(PROXY_PREFIX.length());
+		String[] properties = environment.getProperty(key, "").split("\\s*,\\s*");
+		// No default upstream: the first of the properties that is set is where the calls go.
+		String upstream = java.util.Arrays.stream(properties)
+			.filter(p -> !p.isBlank())
+			.map(p -> environment.getProperty(p, ""))
+			.filter(v -> v.startsWith("http"))
+			.findFirst()
+			.orElse(null);
+		if (upstream != null) {
+			route(props, environment, url, proxy, provider, "", upstream, properties);
+		}
+		else {
+			System.err.println("Spring AI Inspector: not routing '" + provider + "', none of "
+					+ String.join(", ", properties) + " is set to an http(s) base URL");
+		}
 	}
 
 	/**
@@ -106,10 +163,19 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		if (!suffix.isEmpty() && upstream.endsWith(suffix)) {
 			upstream = upstream.substring(0, upstream.length() - suffix.length());
 		}
+		Set<String> routed = new LinkedHashSet<>();
+		routed.add(provider);
 		for (String property : properties) {
 			props.put(property, proxy + "/" + provider + suffix);
+			// The provider the property belongs to (spring.ai.openai.base-url -> openai): its model
+			// beans' calls are on the wire, under this route's name.
+			java.util.regex.Matcher owner = PROPERTY_OWNER.matcher(property);
+			if (owner.lookingAt()) {
+				routed.add(owner.group(1));
+			}
 		}
 		props.put("spring.ai.inspector.upstream." + provider, upstream);
+		props.merge(ROUTED, String.join(",", routed), (a, b) -> a + "," + b);
 	}
 
 	private static boolean isDefault(ConfigurableEnvironment environment, String property, String... defaults) {
@@ -125,16 +191,54 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		return false;
 	}
 
-	private static String models(ConfigurableEnvironment environment) {
-		StringBuilder models = new StringBuilder();
-		for (String provider : new String[] { "anthropic", "openai", "ollama", "mistralai", "deepseek", "google.genai" }) {
-			String model = environment.getProperty("spring.ai." + provider + ".chat.options.model",
-					environment.getProperty("spring.ai." + provider + ".chat.model", ""));
-			if (model != null && !model.isBlank()) {
-				models.append(models.isEmpty() ? "" : ", ").append(model);
+	/**
+	 * The configured chat models, of any provider: {@code spring.ai.<provider>.chat.model} or
+	 * {@code spring.ai.<provider>.chat.options.model} (e.g. jinfer's in-JVM models too).
+	 */
+	static String models(ConfigurableEnvironment environment) {
+		// Per provider: chat.options.model wins over chat.model, as Spring AI resolves it.
+		Map<String, String> models = new LinkedHashMap<>();
+		for (String key : propertyNames(environment)) {
+			java.util.regex.Matcher matcher = CHAT_MODEL.matcher(key);
+			if (matcher.matches()) {
+				try {
+					String model = environment.getProperty(key);
+					if (model != null && !model.isBlank() && (matcher.group(2) != null || !models.containsKey(matcher.group(1)))) {
+						models.put(matcher.group(1), model);
+					}
+				}
+				catch (IllegalArgumentException ex) {
+					// an unresolvable placeholder: not a model name
+				}
 			}
 		}
-		return models.toString();
+		return String.join(", ", new LinkedHashSet<>(models.values()));
+	}
+
+	/**
+	 * The names of all enumerable properties, in property source order. Environment
+	 * variables are named as properties too (SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL ->
+	 * spring.ai.openai.chat.options.model), which the environment resolves by relaxed
+	 * binding. A source that can't list its names (e.g. a composite one wrapping a
+	 * non-enumerable source) is skipped: inspection must never stop the application.
+	 */
+	static Set<String> propertyNames(ConfigurableEnvironment environment) {
+		Set<String> names = new LinkedHashSet<>();
+		for (PropertySource<?> source : environment.getPropertySources()) {
+			if (!(source instanceof EnumerablePropertySource<?> enumerable)) {
+				continue;
+			}
+			try {
+				for (String name : enumerable.getPropertyNames()) {
+					names.add(source instanceof SystemEnvironmentPropertySource
+							? name.toLowerCase(java.util.Locale.ROOT).replace('_', '.') : name);
+				}
+			}
+			catch (RuntimeException ex) {
+				// not listable: its properties are still resolved, just not discovered
+			}
+		}
+		return names;
 	}
 
 	/**

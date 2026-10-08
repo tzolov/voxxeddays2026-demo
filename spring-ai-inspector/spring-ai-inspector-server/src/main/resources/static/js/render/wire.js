@@ -1,4 +1,4 @@
-import { adapterOf, normRequest, normResponse, providerLabel } from '../providers.js';
+import { adapterOf, inputCount, normRequest, normResponse, providerLabel } from '../providers.js';
 import { renderSystemMessage } from './messages.js';
 import { state } from '../state.js';
 import { wireModelKey } from './tokens.js';
@@ -175,6 +175,7 @@ export function renderSystemOne(wire, nreq, nresp) {
 }
 
 // ---------------------------------------------------------------- embeddings
+const NO_HTTP_EMBEDDING = 'Seen at the embedding model bean: no HTTP traffic was recorded for this call (a model running in the JVM).';
 const MAX_EMBEDDING_INPUTS = 20;
 
 /** e.g. "1 vector × 1,536" */
@@ -187,7 +188,8 @@ function renderEmbedding(wire, nreq, nresp) {
 		nresp?.usage?.input != null && `<span class="pill">input: <b>${fmtNum(nresp.usage.input)}</b></span>`].filter(Boolean).join('');
 	const inputs = nreq.inputs.slice(0, MAX_EMBEDDING_INPUTS).map((text, i) => `<div class="msg user"><div class="role">input ${i + 1}</div>
 		<div class="text">${esc(typeof text === 'string' ? oneLine(text, 600) : JSON.stringify(text))}</div></div>`).join('');
-	const more = nreq.inputs.length > MAX_EMBEDDING_INPUTS ? `<div class="notice info">… and ${nreq.inputs.length - MAX_EMBEDDING_INPUTS} more inputs (see Request JSON)</div>` : '';
+	const hidden = inputCount(nreq) - Math.min(nreq.inputs.length, MAX_EMBEDDING_INPUTS);
+	const more = hidden > 0 ? `<div class="notice info">… and ${hidden} more input${hidden === 1 ? '' : 's'}${wire.inProcess ? '' : ' (see Request JSON)'}</div>` : '';
 	const err = nresp?.error ? `<div class="notice err">${esc(nresp.error)}</div>` : '';
 	return `<div class="params">${params}</div>${err}<div class="msgs" style="margin-top:.5rem">${inputs}${more}</div>`;
 }
@@ -211,13 +213,16 @@ export function renderWire(wire) {
 	const nresp = normResponse(wire);
 	const u = nresp && nresp.usage;
 
+	// An in-process call (e.g. an embedding model running in the JVM) has no HTTP request to show.
+	const where = wire.inProcess ? `<span class="path" title="${esc(NO_HTTP_EMBEDDING)}">EmbeddingModel call · no HTTP</span>`
+		: `<span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
-		<span class="pill">${esc(providerLabel(wire))}</span><span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
+		<span class="pill">${esc(providerLabel(wire))}</span>${where}`;
 	const systemOne = adapterOf(wire)?.kind === 'systemone';
 	const embedding = adapterOf(wire)?.kind === 'embedding';
 	if (nreq && embedding) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
-		summary += `<span class="pill">embed ${nreq.inputs.length} input${nreq.inputs.length === 1 ? '' : 's'}</span>`;
+		summary += `<span class="pill">embed ${inputCount(nreq)} input${inputCount(nreq) === 1 ? '' : 's'}</span>`;
 	}
 	else if (nreq && systemOne) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
@@ -244,7 +249,8 @@ export function renderWire(wire) {
 	}
 
 	const tab = state.tabs.get(wire.id) || (nreq ? 'conv' : 'req');
-	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : 'Conversation'], ['req', 'Request JSON'], ['resp', 'Response'], ['hdr', 'Headers']].filter(Boolean);
+	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : 'Conversation'], ['req', wire.inProcess ? 'Request' : 'Request JSON'],
+		['resp', 'Response'], !wire.inProcess && ['hdr', 'Headers']].filter(Boolean);
 	let body = `<div class="tabs">${tabs.map(([id, label]) => `<button class="tab ${tab === id ? 'on' : ''}" data-wire="${esc(wire.id)}" data-tab="${id}">${label}</button>`).join('')}</div>`;
 	if (nreq && systemOne) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderSystemOne(wire, nreq, nresp)}</div>`;
@@ -259,8 +265,8 @@ export function renderWire(wire) {
 	}
 	body += `<div class="pane ${tab === 'req' ? 'on' : ''}" data-pane="req"><div class="col-title">${esc(wire.req.url)}</div><pre class="json">${prettyMaybeJson(wire.req.body)}</pre></div>`;
 	const respBody = wire.resp ? (wire.resp.error ? esc(wire.resp.error) : prettyMaybeJson(wire.resp.body)) : '<span class="spinner"></span> waiting…';
-	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">HTTP ${esc(wire.resp?.status ?? '…')}</div><pre class="json">${respBody}</pre></div>`;
-	body += `<div class="pane ${tab === 'hdr' ? 'on' : ''}" data-pane="hdr"><div class="cols">
+	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">${wire.inProcess ? 'in-process' : `HTTP ${esc(wire.resp?.status ?? '…')}`}</div><pre class="json">${respBody}</pre></div>`;
+	if (!wire.inProcess) body += `<div class="pane ${tab === 'hdr' ? 'on' : ''}" data-pane="hdr"><div class="cols">
 		<div><div class="col-title">request headers</div>${renderHeaders(wire.req.headers)}</div>
 		<div><div class="col-title">response headers</div>${renderHeaders(wire.resp?.headers)}</div></div></div>`;
 

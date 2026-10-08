@@ -195,7 +195,11 @@ public class EventStore {
 		if (!(event.get("runId") instanceof String runId) || this.importing) {
 			return;
 		}
-		if (("vector-search".equals(type) || "tool-start".equals(type)) && event.get("clientCallId") == null) {
+		// Searches and tool runs belong to the open call even when made on another thread. Adds
+		// and embedding calls carry their call from the thread that made them: without one they
+		// stay at run level (e.g. ingesting in the background while a chat call is open).
+		boolean search = "vector-search".equals(type) || ("vector-start".equals(type) && "search".equals(event.get("op")));
+		if ((search || "tool-start".equals(type)) && event.get("clientCallId") == null) {
 			event.put("clientCallId", peek(this.openClientCalls, runId));
 		}
 		if ("client-request".equals(type) && event.get("parentId") == null) {

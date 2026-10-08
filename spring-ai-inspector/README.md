@@ -114,6 +114,14 @@ How the starter hooks in:
   - `spring.ai.deepseek.base-url`: only if unset or pointing at `api.deepseek.com`.
   - `spring.ai.typesafe.base-url`: always, like Anthropic. The proxy forwards to the base-url the app had before (e.g. a
     local Ollama serving Jev models), or to `https://api.typesafe.ai` when none was set.
+  - Any other HTTP provider, when you name its base-url property:
+    `spring.ai.inspector.proxy.<name>=<property>[,<property>...]`, e.g.
+    `spring.ai.inspector.proxy.groq=spring.ai.openai.base-url`. The proxy forwards to that property's value, and the
+    inspector recognizes the wire format by the request path (OpenAI-compatible, Anthropic, Ollama, embeddings).
+- Models that make no HTTP calls (e.g. jinfer running in the JVM) or providers that aren't routed are still shown:
+  their round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
+  model and token usage it reported (marked "no HTTP"), in the cards, the tokens panel and the sequence view.
+- The run header lists the configured chat models of any provider (`spring.ai.<provider>.chat[.options].model`).
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.
 - Tool executions are reported from Spring AI's tool-calling observations. The demos don't include Boot's

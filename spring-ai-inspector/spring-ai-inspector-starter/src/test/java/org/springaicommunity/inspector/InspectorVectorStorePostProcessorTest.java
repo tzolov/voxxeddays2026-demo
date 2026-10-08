@@ -40,8 +40,11 @@ class InspectorVectorStorePostProcessorTest {
 
 		proxy.similaritySearch(SearchRequest.builder().query("milton").topK(2).build());
 
-		assertThat(this.events).singleElement().satisfies(e -> {
-			assertThat(e.get("type")).isEqualTo("vector-search");
+		// Reported when it starts and when it ends, with one id.
+		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("vector-start", "vector-search");
+		assertThat(this.events.get(0)).containsEntry("op", "search").containsEntry("query", "milton");
+		assertThat(this.events.get(1).get("opId")).isEqualTo(this.events.get(0).get("opId"));
+		assertThat(this.events.get(1)).satisfies(e -> {
 			assertThat(e.get("query")).isEqualTo("milton");
 			assertThat(e.get("topK")).isEqualTo(2);
 			assertThat(e.get("results").toString()).contains("landfall").contains("0.9");
@@ -57,7 +60,34 @@ class InspectorVectorStorePostProcessorTest {
 		proxy.add(docs);
 		proxy.accept(docs); // DocumentWriter entry point delegating to add
 
-		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("vector-search", "vector-add", "vector-add");
+		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("vector-start", "vector-search",
+				"vector-start", "vector-add", "vector-start", "vector-add");
+		assertThat(this.events.get(2)).containsEntry("op", "add").containsEntry("count", 2);
+	}
+
+	@Test
+	void reportsAFailedOperationWithItsError() {
+		FakeStore proxy = wrap(new FakeStore() {
+			@Override
+			public void add(List<Document> documents) {
+				throw new IllegalStateException("embedding model down");
+			}
+		});
+
+		org.assertj.core.api.Assertions.assertThatIllegalStateException().isThrownBy(() -> proxy.add(List.of(new Document("a"))));
+
+		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("vector-start", "vector-add");
+		assertThat(this.events.get(1)).containsEntry("error", "IllegalStateException: embedding model down");
+		// Any failure ends the operation, an Error too: it isn't shown as running for good.
+		FakeStore failing = wrap(new FakeStore() {
+			@Override
+			public List<Document> similaritySearch(SearchRequest request) {
+				throw new StackOverflowError();
+			}
+		});
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> failing.similaritySearch(SearchRequest.builder().query("q").build()))
+			.isInstanceOf(StackOverflowError.class);
+		assertThat(this.events.get(3)).containsEntry("type", "vector-search").containsEntry("error", "StackOverflowError: null");
 	}
 
 	/** Non-final, like SimpleVectorStore. */

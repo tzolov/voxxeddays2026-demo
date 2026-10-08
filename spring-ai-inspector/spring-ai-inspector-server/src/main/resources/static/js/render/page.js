@@ -2,16 +2,21 @@ import { usageOf } from '../providers.js';
 import { renderItems } from './cards.js';
 import { renderSequence } from './sequence.js';
 import { renderMcpPanel } from './mcp.js';
+import { advisorOnlyCalls, usageOfModelCall } from './models.js';
 import { renderTokenPanel } from './tokens.js';
 import { replay } from '../replay.js';
 import { pref, state } from '../state.js';
 import { esc, fmtMs, fmtNum, fmtTime } from '../util.js';
 
 // ---------------------------------------------------------------- page rendering
+/** Tokens and round-trips of a run: HTTP ones, and model calls without HTTP (see models.js). */
 export function runTotals(run) {
 	let input = 0, output = 0;
-	for (const w of run.wireList) { const u = usageOf(w); if (u) { input += u.input || 0; output += u.output || 0; } }
-	return { input, output };
+	const noHttp = advisorOnlyCalls(run);
+	for (const u of [...run.wireList.map(usageOf), ...noHttp.map(usageOfModelCall)]) {
+		if (u) { input += u.input || 0; output += u.output || 0; }
+	}
+	return { input, output, trips: run.wireList.length + noHttp.length };
 }
 
 export function renderSidebar() {
@@ -20,7 +25,7 @@ export function renderSidebar() {
 		const t = runTotals(r);
 		return `<button class="run-item ${r.id === state.selected ? 'sel' : ''}" data-run="${esc(r.id)}">
 			<div class="name"><span class="status ${r.ended ? '' : 'running'}"></span>${esc(r.app)}</div>
-			<div class="meta">${fmtTime(r.started)} · ${r.calls.size} call${r.calls.size === 1 ? '' : 's'} · ${r.wireList.length} trip${r.wireList.length === 1 ? '' : 's'}${t.input ? ` · ${fmtNum(t.input + t.output)} tok` : ''}</div>
+			<div class="meta">${fmtTime(r.started)} · ${r.calls.size} call${r.calls.size === 1 ? '' : 's'} · ${t.trips} trip${t.trips === 1 ? '' : 's'}${t.input ? ` · ${fmtNum(t.input + t.output)} tok` : ''}</div>
 		</button>`;
 	}).join('') : '<div class="meta" style="padding:.25rem;color:var(--muted)">No runs yet.</div>';
 }
@@ -55,7 +60,7 @@ export function renderMain() {
 		<span class="stat">${run.ended ? 'finished' : '<span class="spinner"></span> running'}</span>
 		${run.model ? `<span class="stat">configured <b>${esc(run.model)}</b></span>` : ''}
 		<span class="stat"><b>${run.calls.size}</b> ChatClient calls</span>
-		<span class="stat"><b>${run.wireList.length}</b> model round-trips</span>
+		<span class="stat"><b>${t.trips}</b> model round-trips</span>
 		${run.tools.size ? `<span class="stat"><b>${run.tools.size}</b> tool runs</span>` : ''}
 		<span class="stat"><b>${fmtNum(t.input)}</b> in · <b>${fmtNum(t.output)}</b> out tokens</span>
 		${run.ended && run.started ? `<span class="stat">${fmtMs(run.ended - run.started)}</span>` : ''}
