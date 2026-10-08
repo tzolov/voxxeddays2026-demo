@@ -65,6 +65,37 @@ export function renderMain() {
 	main.innerHTML = head + renderTokenPanel(run) + renderMcpPanel(run) + body;
 }
 
+/**
+ * Where the sticky parts stop: the pinned tokens panel right under the top bar (and, while
+ * replaying, the replay bar); the sequence lane heads under those and the pinned panel.
+ */
+export function updateStickyOffsets() {
+	const replayBar = document.getElementById('replay');
+	const top = document.querySelector('.topbar').offsetHeight + (replayBar.hidden ? 0 : replayBar.offsetHeight);
+	document.documentElement.style.setProperty('--pin-top', top + 'px');
+	const pinned = document.querySelector('.tokens.pinned');
+	document.documentElement.style.setProperty('--seq-top', top + (pinned ? pinned.offsetHeight : 0) + 'px');
+}
+
+// Recomputes the offsets whenever what they depend on changes size: the bars, and the pinned
+// tokens panel (folded, re-wrapped by the text size or the sidebar's width, ...).
+let resizeObserver = null;
+function watchStickyOffsets() {
+	updateStickyOffsets();
+	if (typeof ResizeObserver === 'undefined') return;
+	resizeObserver ||= new ResizeObserver(updateStickyOffsets);
+	resizeObserver.disconnect(); // the panel is a new element after each render
+	for (const el of [document.querySelector('.topbar'), document.getElementById('replay'), document.querySelector('.tokens.pinned')]) {
+		if (el) resizeObserver.observe(el);
+	}
+}
+
+/** Keeps the sticky lane heads aligned with the sequence diagram scrolled sideways under them. */
+export function syncSequenceHead(wrap) {
+	const head = wrap.parentElement?.querySelector('.seq-head');
+	if (head) head.scrollLeft = wrap.scrollLeft;
+}
+
 export let renderPending = false;
 export function render() {
 	if (renderPending) return;
@@ -72,12 +103,15 @@ export function render() {
 	requestAnimationFrame(() => {
 		renderPending = false;
 		const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+		// The sequence's sideways scroll is kept across live updates of the same run, not into another run.
+		const before = document.querySelector('.seq-view');
+		const scroll = before && { run: before.dataset.run, left: before.querySelector('.seq-wrap').scrollLeft };
 		renderSidebar();
 		renderMain();
-		// The pinned tokens panel sticks right under the top bar and, while replaying, the replay bar.
-		const replayBar = document.getElementById('replay');
-		const top = document.querySelector('.topbar').offsetHeight + (replayBar.hidden ? 0 : replayBar.offsetHeight);
-		document.documentElement.style.setProperty('--pin-top', top + 'px');
+		const view = document.querySelector('.seq-view');
+		if (view && scroll && view.dataset.run === scroll.run) view.querySelector('.seq-wrap').scrollLeft = scroll.left;
+		if (view) syncSequenceHead(view.querySelector('.seq-wrap'));
+		watchStickyOffsets();
 		if (state.follow && nearBottom) window.scrollTo(0, document.body.scrollHeight);
 	});
 }

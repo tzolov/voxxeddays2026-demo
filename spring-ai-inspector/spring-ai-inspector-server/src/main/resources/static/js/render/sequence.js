@@ -1,6 +1,6 @@
 import { normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { fmtCompact, wireModelKey } from './tokens.js';
-import { isJevWire } from './cards.js';
+import { embeddingTotals, foldKey, foldKind, isEmbeddingWire, isJevWire } from './cards.js';
 import { mcpName, mcpSummary } from './mcp.js';
 import { memoryStoreKey } from './memory.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
@@ -47,6 +47,7 @@ export function buildSequence(run) {
 		if (w.resp.error || w.resp.status >= 400) return `HTTP ${w.resp.status}`;
 		const r = normResponse(w);
 		if (r?.answers) return systemOneHighlights(r).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'answers';
+		if (r?.vectors != null) return `${r.vectors} vector${r.vectors === 1 ? '' : 's'} · ${fmtMs(w.resp.durationMs)}`;
 		const tools = (r?.blocks || []).filter((b) => b.type === 'tool_use').map((b) => b.name);
 		return `${tools.length ? 'tool_use ' + tools.join(', ') : (r?.stop || 'response')} · ${fmtMs(w.resp.durationMs)}`;
 	}
@@ -57,18 +58,21 @@ export function buildSequence(run) {
 		const openEnd = call?.resp ? call.resp.seq : Infinity;
 		for (let i = 0; i < items.length;) {
 			let j = i;
-			// Fold runs of systemOne checks to the same lane into one exchange.
-			const jevLane = isJevWire(items[i]) && wireLane(r, items[i].ref);
-			while (j < items.length && isJevWire(items[j]) && wireLane(r, items[j].ref) === jevLane) j++;
+			// Fold runs of systemOne checks or embedding calls to the same lane into one exchange.
+			const key = foldKey(items[i]); const fold = foldKind(items[i]);
+			while (key && j < items.length && foldKey(items[j]) === key) j++;
 			if (j - i >= 3) {
 				const group = items.slice(i, j).map((it) => it.ref);
-				const to = jevLane;
-				// Checks may answer out of order: the group is done at its latest response.
+				const to = wireLane(r, group[0]); const kind = fold === 'jev' ? 'jev' : 'model'; const gpath = [...path, fold + ':' + group[0].id];
+				// Calls may answer out of order: the group is done at its latest response.
 				const done = group.every((w) => w.resp) ? group.reduce((a, w) => (w.resp.seq > a.resp.seq ? w : a)) : null;
 				group.forEach((w) => addTokens(to, w));
-				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, label: `${group.length} systemOne checks`, kind: 'jev', path: [...path, 'jev:' + group[0].id] });
-				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: adv, ret: true, kind: 'jev', path: [...path, 'jev:' + group[0].id],
-					label: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
+				const totals = fold === 'embed' ? embeddingTotals(group) : null;
+				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: adv, to, kind, path: gpath,
+					label: totals ? `${group.length} embedding calls · ${totals.inputs} inputs` : `${group.length} systemOne checks` });
+				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: adv, ret: true, kind, path: gpath,
+					label: totals ? `${totals.vectors} vectors · ${fmtMs(totals.ms ?? 0)}`
+						: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
 				acts.push({ lane: to, from: group[0].req.seq, to: done ? done.resp.seq : openEnd, nest: 0 });
 				i = j;
 				continue;
@@ -78,7 +82,9 @@ export function buildSequence(run) {
 				const w = it.ref; const to = wireLane(r, w); const req = normRequest(w);
 				addTokens(to, w);
 				const kind = to.includes('|jev|') ? 'jev' : 'model';
-				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions` : `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
+				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions`
+					: isEmbeddingWire(it) ? `#${w.num} · embed ${req?.inputs.length ?? '?'} input${req?.inputs.length === 1 ? '' : 's'}`
+					: `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
 				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: adv, to, label, kind, path: [...path, 'wire:' + w.id] });
 				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: adv, ret: true, kind, label: wireReturn(w), path: [...path, 'wire:' + w.id] });
 				acts.push({ lane: to, from: w.req.seq, to: w.resp ? w.resp.seq : openEnd, nest: 0 });
@@ -204,19 +210,23 @@ export function renderSequence(run, scaled) {
 	};
 	const height = ys[ys.length - 1] + ROW + 10;
 	const width = LEFT * 2 + lanes.length * LANE_W;
-	let svg = '';
+	// The lane heads are drawn apart, in a header that stays in view while the diagram scrolls
+	// (see .seq-head); both share one coordinate system, the diagram starting below the heads.
+	let svg = ''; let head = '';
 	// remote groups
 	for (const [gid, label] of groups) {
 		if (!label) continue;
 		const gl = lanes.filter((l) => l.group === gid);
 		const x0 = x.get(gl[0].key) - LANE_W / 2 + 6; const x1 = x.get(gl[gl.length - 1].key) + LANE_W / 2 - 6;
-		svg += `<rect class="group" x="${x0}" y="4" width="${x1 - x0}" height="${height - 8}" rx="10"/><text class="group-label" x="${x0 + 8}" y="16">${esc(label)} · linked by timing</text>`;
+		const group = `<rect class="group" x="${x0}" y="4" width="${x1 - x0}" height="${height - 8}" rx="10"/>`;
+		head += `${group}<text class="group-label" x="${x0 + 8}" y="16">${esc(label)} · linked by timing</text>`;
+		svg += group;
 	}
 	// lane heads and lifelines
 	for (const l of lanes) {
 		const cx = x.get(l.key);
-		svg += `<line class="lifeline" x1="${cx}" y1="${HEAD}" x2="${cx}" y2="${height}"/>
-			<g class="lane-head"><rect x="${cx - LANE_W / 2 + 12}" y="20" width="${LANE_W - 24}" height="36" rx="6"/>
+		svg += `<line class="lifeline" x1="${cx}" y1="${HEAD}" x2="${cx}" y2="${height}"/>`;
+		head += `<g class="lane-head"><rect x="${cx - LANE_W / 2 + 12}" y="20" width="${LANE_W - 24}" height="36" rx="6"/>
 			<text x="${cx}" y="${l.sub ? 35 : 42}" text-anchor="middle">${esc(oneLine(l.label, 24))}</text>
 			${l.sub ? `<text class="sub" x="${cx}" y="49" text-anchor="middle">${esc(oneLine(l.sub, 28))}</text>` : ''}
 			${l.tokens ? `<text class="sub" x="${cx}" y="68" text-anchor="middle">${fmtCompact(l.tokens.input)} in · ${fmtCompact(l.tokens.output)} out</text>` : ''}</g>`;
@@ -248,6 +258,7 @@ export function renderSequence(run, scaled) {
 	});
 	const colors = { call: '--text', model: '--assistant', tool: '--tool', jev: '--system', vector: '--user', remote: '--accent' };
 	const defs = `<defs>${Object.entries(colors).map(([kd, c]) => `<marker id="ah-${kd}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(${c});stroke:none"/></marker>`).join('')}</defs>`;
-	return `<div class="seq-wrap"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${defs}${svg}</svg></div>
+	return `<div class="seq-view" data-run="${esc(run.id)}"><div class="seq-head"><svg width="${width}" height="${HEAD}" viewBox="0 0 ${width} ${HEAD}">${head}</svg></div>
+		<div class="seq-wrap"><svg width="${width}" height="${height - HEAD}" viewBox="0 ${HEAD} ${width} ${height - HEAD}">${defs}${svg}</svg></div></div>
 		<div class="s1-crit" style="margin-top:.4rem">Click an arrow to open it in the Cards view. Dashed arrows are returns.</div>`;
 }

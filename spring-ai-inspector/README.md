@@ -37,13 +37,16 @@ connection in the **MCP connections** panel, with the server's name, version, pr
   summary events marked), and memory files (`spring.ai.inspector.memory-dirs`, defaults to `agent.memory.dir`).
 - Runs of 3+ systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire". systemOne
   round-trips are labelled with who served them, e.g. `typesafe · system-one` or `ollama · system-one`.
+- Embedding calls (OpenAI-compatible `/embeddings`, Ollama `/api/embed`) show their model, inputs, vectors and prompt
+  tokens; runs of 3+ (e.g. ingesting documents for RAG) fold into one group, in the cards and in the sequence view.
 
 ## Sequence view and linked agents
 
 Each run has a **Cards | Sequence** toggle. The sequence view draws the run as lanes (app, advisors, sub-agents, each
 model, systemOne model, tools, vector store) with arrows in time order: requests solid, returns dashed, labelled with message
 counts, `tool_use` names, stop reasons and latencies. **to scale** spaces rows by elapsed time, so the audience sees
-where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane.
+where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane. The
+lane heads stay in view while a long diagram scrolls (under the pinned tokens panel, when it is pinned).
 
 Calls in another JVM are **linked by timing**. When a ChatClient call starts while another run has a tool call open
 (e.g. 18's `Task` tool calling the A2A airbnb-agent), the inspector nests the remote call under that tool, in the Cards

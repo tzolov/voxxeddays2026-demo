@@ -1,11 +1,12 @@
-import { adapterOf, normResponse, providerLabel, usageOf } from '../providers.js';
+import { adapterOf, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { mcpName, renderMcpMessages } from './mcp.js';
 import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
+import { wireModelKey } from './tokens.js';
 import { NOUL_HOT, renderWire } from './wire.js';
 import { state } from '../state.js';
-import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine, parseJson, prettyMaybeJson } from '../util.js';
+import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine, parseJson, prettyMaybeJson, recordedTs } from '../util.js';
 
 // ---------------------------------------------------------------- tool executions
 // Where an MCP tool comes from: connection, server and the tool's own name on that server.
@@ -44,26 +45,70 @@ export function renderItem(it, latest) {
 }
 
 export const isJevWire = (it) => it.kind === 'wire' && adapterOf(it.ref)?.kind === 'systemone';
+export const isEmbeddingWire = (it) => it.kind === 'wire' && adapterOf(it.ref)?.kind === 'embedding';
 
-// Renders items, folding runs of 3+ consecutive Jev systemOne checks (e.g. per-document
-// RAG filtering) into one group so they don't drown the model round-trips.
+/** Round-trips that fold into one group when 3+ run back to back: systemOne checks, embedding calls. */
+export const foldKind = (it) => (isJevWire(it) ? 'jev' : isEmbeddingWire(it) ? 'embed' : null);
+
+/**
+ * What folds together: round-trips of one fold kind to one model, the same in the cards and
+ * the sequence view (one lane), so an arrow of the sequence opens its group in the cards.
+ */
+export function foldKey(it) {
+	const kind = foldKind(it);
+	return kind && kind + '|' + wireModelKey(it.ref);
+}
+
+/** The shell of a folded group: its round-trips, with the group's own pills and timing. */
+function renderFoldGroup(group, prefix, title, pills, timing) {
+	const key = prefix + ':' + group[0].id;
+	const done = group.filter((w) => w.resp).length;
+	return `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary><span class="chev">▸</span>
+		<span class="pill">${esc(providerLabel(group[0]))}</span><b>${group.length} ${title}</b>${pills(done)}
+		${done < group.length ? `<span class="spinner"></span><span class="right-meta">${done}/${group.length}</span>` : ''}
+		<span class="right-meta">#${group[0].num}–#${group[group.length - 1].num} · ${timing}</span></summary>
+		<div class="pane on">${group.map(renderWire).join('')}</div></details>`;
+}
+
+function renderJevGroup(group) {
+	const hot = group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length;
+	return renderFoldGroup(group, 'jev', 'systemOne checks',
+		(done) => (done ? `<span class="pill" title="checks with at least one noul answer ≥ ${NOUL_HOT}">${hot} with P(true) ≥ ${NOUL_HOT}</span>` : ''),
+		`up to ${fmtMs(Math.max(...group.map((w) => w.resp?.durationMs || 0)))}`);
+}
+
+/**
+ * Totals of a run of embedding calls (e.g. ingesting documents for RAG). {@code ms} is the
+ * time it took, first request to last response, so parallel calls aren't counted twice.
+ */
+export function embeddingTotals(group) {
+	const answered = group.filter((w) => w.resp);
+	return { inputs: group.reduce((n, w) => n + (normRequest(w)?.inputs.length ?? 0), 0),
+		vectors: group.reduce((n, w) => n + (normResponse(w)?.vectors ?? 0), 0),
+		tokens: group.reduce((n, w) => n + (usageOf(w)?.input ?? 0), 0),
+		ms: answered.length ? Math.max(...answered.map((w) => recordedTs(w.resp))) - Math.min(...group.map((w) => recordedTs(w.req))) : null };
+}
+
+function renderEmbeddingGroup(group) {
+	const model = normRequest(group[0])?.params.model;
+	const t = embeddingTotals(group);
+	return renderFoldGroup(group, 'embed', 'embedding calls',
+		() => `${model ? `<span class="pill">${esc(model)}</span>` : ''}<span class="pill">${fmtNum(t.inputs)} inputs</span>${t.tokens ? `<span class="right-meta">${fmtNum(t.tokens)} in</span>` : ''}`,
+		t.ms != null ? fmtMs(t.ms) : '…');
+}
+
+// Renders items, folding runs of 3+ consecutive systemOne checks (e.g. per-document RAG
+// filtering) or embedding calls (e.g. ingesting documents) into one group each, so they
+// don't drown the model round-trips.
 export function renderItems(items, latest) {
 	let html = '';
 	for (let i = 0; i < items.length;) {
+		const key = foldKey(items[i]);
 		let j = i;
-		while (j < items.length && isJevWire(items[j])) j++;
+		while (key && j < items.length && foldKey(items[j]) === key) j++;
 		if (j - i >= 3) {
 			const group = items.slice(i, j).map((it) => it.ref);
-			const key = 'jev:' + group[0].id;
-			const done = group.filter((w) => w.resp).length;
-			const hot = group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length;
-			const ms = group.map((w) => w.resp?.durationMs || 0);
-			html += `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary><span class="chev">▸</span>
-				<span class="pill">${esc(providerLabel(group[0]))}</span><b>${group.length} systemOne checks</b>
-				${done < group.length ? `<span class="spinner"></span><span class="right-meta">${done}/${group.length}</span>` : ''}
-				${done ? `<span class="pill" title="checks with at least one noul answer ≥ ${NOUL_HOT}">${hot} with P(true) ≥ ${NOUL_HOT}</span>` : ''}
-				<span class="right-meta">#${group[0].num}–#${group[group.length - 1].num} · up to ${fmtMs(Math.max(...ms))}</span></summary>
-				<div class="pane on">${group.map(renderWire).join('')}</div></details>`;
+			html += foldKind(items[i]) === 'jev' ? renderJevGroup(group) : renderEmbeddingGroup(group);
 			i = j;
 		}
 		else {

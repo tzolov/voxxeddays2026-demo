@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 
 import { state } from '../../main/resources/static/js/state.js';
 import { handle } from '../../main/resources/static/js/model.js';
-import { ADAPTERS, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
+import { ADAPTERS, adapterOf, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
@@ -306,6 +306,63 @@ test('ollama: joins newline-delimited stream chunks', () => {
 
 	assert.equal(r.blocks[0].text, 'Hello');
 	assert.deepEqual(r.usage, { input: 4, output: 2 });
+});
+
+test('embeddings: model, inputs, vectors and prompt tokens, for OpenAI and Ollama', () => {
+	const openai = wire('openai', '/v1/embeddings', { model: 'text-embedding-3-small', input: ['a chunk', 'another'] },
+		JSON.stringify({ model: 'text-embedding-3-small', data: [{ embedding: [0.1, 0.2, 0.3] }, { embedding: [0.4, 0.5, 0.6] }], usage: { prompt_tokens: 7, total_tokens: 7 } }));
+	assert.deepEqual(normRequest(openai).inputs, ['a chunk', 'another']);
+	assert.deepEqual({ ...normResponse(openai) }, { model: 'text-embedding-3-small', vectors: 2, dimensions: 3, blocks: [], usage: { input: 7, output: 0 } });
+	const html = renderWire(openai);
+	assert.match(html, /<span class="pill">text-embedding-3-small<\/span><span class="pill">embed 2 inputs<\/span>/);
+	assert.match(html, /2 vectors × 3/);
+	assert.match(html, />Embedding<\/button>/);
+	assert.match(html, /input 2<\/div>\s*<div class="text">another/);
+
+	const ollama = wire('ollama', '/api/embed', { model: 'nomic-embed-text', input: 'one text' },
+		JSON.stringify({ model: 'nomic-embed-text', embeddings: [[1, 2]], prompt_eval_count: 3 }));
+	assert.equal(normResponse(ollama).vectors, 1);
+	assert.equal(usageOf(ollama).input, 3);
+	// Pre-tokenized text is one input; Mistral reports errors without an `error` field.
+	assert.equal(normRequest(wire('openai', '/v1/embeddings', { input: [9906, 1917, 0] }, '{}')).inputs.length, 1);
+	assert.equal(normResponse(wire('mistralai', '/v1/embeddings', { input: 'x' },
+		JSON.stringify({ object: 'error', message: 'Unauthorized', type: 'invalid_request_error' }))).error, 'invalid_request_error: Unauthorized');
+	// A chat round-trip of the same provider is unaffected.
+	assert.equal(adapterOf(wire('openai', '/v1/chat/completions', { messages: [] }, '{}')), ADAPTERS.openai);
+});
+
+test('runs of embedding calls fold into one group, in cards and in the sequence', () => {
+	handle({ type: 'run-start', runId: 'rag', seq: 1, ts: 1000, app: '05-1-modular-rag · DemoApplication' });
+	for (let i = 0; i < 5; i++) {
+		handle({ type: 'wire-request', runId: 'rag', seq: 2 + 2 * i, ts: 1000 + 10 * i, wireId: 'e' + i, provider: 'openai', method: 'POST',
+			path: '/v1/embeddings', url: 'u', headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['chunk ' + i] }) });
+		handle({ type: 'wire-response', runId: 'rag', seq: 3 + 2 * i, ts: 1005 + 10 * i, wireId: 'e' + i, status: 200, durationMs: 100, headers: {},
+			body: JSON.stringify({ data: [{ embedding: [0, 1] }], usage: { prompt_tokens: 4 } }) });
+	}
+	const run = state.runs.get('rag');
+
+	const cards = renderItems(run.items, null);
+	assert.match(cards, /<b>5 embedding calls<\/b>\s*<span class="pill">text-embedding-3-small<\/span><span class="pill">5 inputs<\/span>/);
+	assert.match(cards, /20 in/);
+	// The time it took, first request to last response (parallel calls aren't counted twice).
+	assert.match(cards, /#1–#5 · 45 ms/);
+	const { lanes, msgs } = buildSequence(run);
+	assert.deepEqual(msgs.map((m) => m.label), ['5 embedding calls · 5 inputs', '5 vectors · 45 ms']);
+	assert.ok(lanes.some((l) => l.label === 'text-embedding-3-small' && l.sub === 'openai'));
+
+	// Runs only fold per model, the same in both views, so a sequence arrow opens its card group.
+	handle({ type: 'wire-request', runId: 'rag', seq: 20, ts: 2000, wireId: 'other', provider: 'openai', method: 'POST', path: '/v1/embeddings',
+		url: 'u', headers: {}, body: JSON.stringify({ model: 'text-embedding-3-large', input: ['x'] }) });
+	assert.match(renderItems(run.items, null), /<b>5 embedding calls<\/b>[\s\S]*data-key="wire:other"/);
+	assert.deepEqual(buildSequence(run).msgs.map((m) => m.path.at(-1)), ['embed:e0', 'embed:e0', 'wire:other']);
+
+	// The lane heads are drawn in their own (sticky) header, above the diagram.
+	const seq = renderSequence(run, false);
+	assert.match(seq, /<div class="seq-view" data-run="rag">/);
+	const [head, body] = [seq.match(/<div class="seq-head">([\s\S]*?)<\/div>/)[1], seq.match(/<div class="seq-wrap">([\s\S]*?)<\/div>/)[1]];
+	assert.match(head, /lane-head[\s\S]*text-embedding-3-small/);
+	assert.doesNotMatch(body, /lane-head/);
+	assert.match(body, /5 embedding calls/);
 });
 
 test('typesafe: systemOne requests and answers', () => {

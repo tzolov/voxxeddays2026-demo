@@ -2,7 +2,7 @@
 // importable without a browser (see src/test/js).
 import { exportRun, importFiles } from './io.js';
 import { handle } from './model.js';
-import { render } from './render/page.js';
+import { render, syncSequenceHead } from './render/page.js';
 import { replay, startReplay, stepReplay, stopReplay, togglePause } from './replay.js';
 import { pref, savePref, state } from './state.js';
 
@@ -34,6 +34,10 @@ function selectLinkedRun() {
 document.addEventListener('toggle', (e) => {
 	const key = e.target.dataset && e.target.dataset.key;
 	if (key) state.open.set(key, e.target.open);
+}, true);
+// Scroll events don't bubble: listen in the capture phase for the sequence diagram's sideways scroll.
+document.addEventListener('scroll', (e) => {
+	if (e.target.classList?.contains('seq-wrap')) syncSequenceHead(e.target);
 }, true);
 
 document.addEventListener('click', (e) => {

@@ -86,9 +86,11 @@ export function renderHeaders(h) {
 }
 
 export function previousConversation(wire) {
-	// The closest earlier round-trip to the same provider, for the re-sent / new markers.
+	// The closest earlier round-trip to the same provider and protocol, for the re-sent / new markers.
+	const adapter = adapterOf(wire);
+	if (!adapter) return null;
 	for (let w = wire.prev; w; w = w.prev) {
-		if (w.req.provider === wire.req.provider && adapterOf(w)) return normRequest(w);
+		if (w.req.provider === wire.req.provider && adapterOf(w) === adapter) return normRequest(w);
 	}
 	return null;
 }
@@ -172,6 +174,24 @@ export function renderSystemOne(wire, nreq, nresp) {
 		<table class="s1" style="margin-top:.6rem"><thead><tr><th>question</th><th>asked</th><th>answer</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// ---------------------------------------------------------------- embeddings
+const MAX_EMBEDDING_INPUTS = 20;
+
+/** e.g. "1 vector × 1,536" */
+export const embeddingResult = (nresp) => `${fmtNum(nresp.vectors)} vector${nresp.vectors === 1 ? '' : 's'}${nresp.dimensions ? ' × ' + fmtNum(nresp.dimensions) : ''}`;
+
+function renderEmbedding(wire, nreq, nresp) {
+	const params = [nreq.params.model && `<span class="pill">model: <b>${esc(nreq.params.model)}</b></span>`,
+		nreq.params.dimensions && `<span class="pill">dimensions: <b>${esc(nreq.params.dimensions)}</b></span>`,
+		nresp && !nresp.error && `<span class="pill">${embeddingResult(nresp)}</span>`,
+		nresp?.usage?.input != null && `<span class="pill">input: <b>${fmtNum(nresp.usage.input)}</b></span>`].filter(Boolean).join('');
+	const inputs = nreq.inputs.slice(0, MAX_EMBEDDING_INPUTS).map((text, i) => `<div class="msg user"><div class="role">input ${i + 1}</div>
+		<div class="text">${esc(typeof text === 'string' ? oneLine(text, 600) : JSON.stringify(text))}</div></div>`).join('');
+	const more = nreq.inputs.length > MAX_EMBEDDING_INPUTS ? `<div class="notice info">… and ${nreq.inputs.length - MAX_EMBEDDING_INPUTS} more inputs (see Request JSON)</div>` : '';
+	const err = nresp?.error ? `<div class="notice err">${esc(nresp.error)}</div>` : '';
+	return `<div class="params">${params}</div>${err}<div class="msgs" style="margin-top:.5rem">${inputs}${more}</div>`;
+}
+
 // Compact answer highlights for the round-trip summary line.
 export function systemOneHighlights(nresp) {
 	if (!nresp || !nresp.answers) return '';
@@ -194,7 +214,12 @@ export function renderWire(wire) {
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
 		<span class="pill">${esc(providerLabel(wire))}</span><span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	const systemOne = adapterOf(wire)?.kind === 'systemone';
-	if (nreq && systemOne) {
+	const embedding = adapterOf(wire)?.kind === 'embedding';
+	if (nreq && embedding) {
+		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
+		summary += `<span class="pill">embed ${nreq.inputs.length} input${nreq.inputs.length === 1 ? '' : 's'}</span>`;
+	}
+	else if (nreq && systemOne) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
 		const n = Object.keys(nreq.questions).length;
 		summary += `<span class="pill">${n} question${n === 1 ? '' : 's'}</span>`;
@@ -211,6 +236,7 @@ export function renderWire(wire) {
 	else {
 		const toolUses = nresp && nresp.blocks ? nresp.blocks.filter((b) => b.type === 'tool_use') : [];
 		if (systemOne) summary += systemOneHighlights(nresp);
+		else if (embedding && nresp && !nresp.error) summary += `<span class="pill stop-end_turn">${embeddingResult(nresp)}</span>`;
 		else if (toolUses.length) summary += toolUses.map((t) => `<span class="pill stop-tool_use">⚙ ${esc(t.name)}</span>`).join('');
 		else if (nresp && nresp.stop) summary += `<span class="pill ${stopClass(nresp.stop)}">${esc(nresp.stop)}</span>`;
 		if (u && (u.input != null || u.output != null)) summary += `<span class="right-meta">${fmtNum(u.input)} in · ${fmtNum(u.output)} out</span>`;
@@ -218,10 +244,13 @@ export function renderWire(wire) {
 	}
 
 	const tab = state.tabs.get(wire.id) || (nreq ? 'conv' : 'req');
-	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : 'Conversation'], ['req', 'Request JSON'], ['resp', 'Response'], ['hdr', 'Headers']].filter(Boolean);
+	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : 'Conversation'], ['req', 'Request JSON'], ['resp', 'Response'], ['hdr', 'Headers']].filter(Boolean);
 	let body = `<div class="tabs">${tabs.map(([id, label]) => `<button class="tab ${tab === id ? 'on' : ''}" data-wire="${esc(wire.id)}" data-tab="${id}">${label}</button>`).join('')}</div>`;
 	if (nreq && systemOne) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderSystemOne(wire, nreq, nresp)}</div>`;
+	}
+	else if (nreq && embedding) {
+		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderEmbedding(wire, nreq, nresp)}</div>`;
 	}
 	else if (nreq) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv"><div class="cols">

@@ -192,9 +192,37 @@ export function providerLabel(wire) {
 	return wire.req.provider === 'typesafe' ? `${servedBy(wire)} · system-one` : wire.req.provider;
 }
 
+// Embedding requests (e.g. ingesting documents for RAG): OpenAI-compatible /embeddings (OpenAI,
+// Mistral) and Ollama's /api/embed (/api/embeddings before). Normalized to the inputs sent, the
+// vectors returned and the prompt tokens they cost.
+export const EMBEDDINGS = {
+	kind: 'embedding',
+	providers: new Set(['openai', 'mistralai', 'ollama']),
+	matches: (path) => /\/(embeddings|api\/embed)$/.test(path),
+	request: (req) => {
+		const input = req.input ?? req.prompt;
+		// An array of token ids is one input (OpenAI accepts pre-tokenized text).
+		const tokens = Array.isArray(input) && input.length > 0 && input.every((t) => typeof t === 'number');
+		const inputs = input == null ? [] : Array.isArray(input) && !tokens ? input : [input];
+		return { params: pick(req, ['model', 'dimensions', 'encoding_format']), inputs, system: null, tools: [], messages: [] };
+	},
+	response: (body) => {
+		const json = parseJson(body);
+		if (!json) return null;
+		const err = json.error ?? (json.object === 'error' ? json : null); // OpenAI / Ollama, Mistral
+		if (err) return { error: typeof err === 'string' ? err : [err.type || err.code, err.message].filter(Boolean).join(': ') || JSON.stringify(err) };
+		const vectors = json.data || json.embeddings || (json.embedding ? [json.embedding] : []);
+		const first = vectors[0]?.embedding ?? vectors[0];
+		const u = json.usage || {};
+		return { model: json.model, vectors: vectors.length, dimensions: Array.isArray(first) ? first.length : undefined, blocks: [],
+			usage: { input: u.prompt_tokens ?? u.total_tokens ?? json.prompt_eval_count, output: 0 } };
+	},
+};
+
 export function adapterOf(wire) {
 	const a = ADAPTERS[wire.req.provider];
-	return a && a.matches(wire.req.path) ? a : null;
+	if (a && a.matches(wire.req.path)) return a;
+	return EMBEDDINGS.providers.has(wire.req.provider) && EMBEDDINGS.matches(wire.req.path) ? EMBEDDINGS : null;
 }
 
 export function normRequest(wire) {
