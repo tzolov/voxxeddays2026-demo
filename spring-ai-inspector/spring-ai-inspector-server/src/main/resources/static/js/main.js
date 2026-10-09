@@ -75,12 +75,20 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 	savePref('sidebar', pref('sidebar', 'open') === 'open' ? 'closed' : 'open');
 	applyPrefs();
 });
+document.getElementById('palette').addEventListener('click', () => {
+	savePref('palette', pref('palette', '') === 'spring' ? '' : 'spring');
+	applyPrefs();
+});
 document.getElementById('clear').addEventListener('click', () => fetch('api/events', { method: 'DELETE' }));
 
 function applyPrefs() {
 	document.documentElement.style.setProperty('--scale', pref('scale', '1'));
 	const theme = pref('theme', '');
 	if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
+	// An optional color scheme next to light / dark: the Spring look (spring.io colors, Spring AI logo).
+	const palette = pref('palette', '');
+	if (palette) document.documentElement.dataset.palette = palette; else delete document.documentElement.dataset.palette;
+	document.getElementById('palette').classList.toggle('on', palette === 'spring');
 	document.getElementById('follow').classList.toggle('on', state.follow);
 	const sidebarOpen = pref('sidebar', 'open') === 'open';
 	document.querySelector('.layout').classList.toggle('collapsed', !sidebarOpen);

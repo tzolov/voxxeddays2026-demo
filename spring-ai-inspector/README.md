@@ -43,6 +43,12 @@ connection in the **MCP connections** panel, with the server's name, version, pr
 - Embedding calls (OpenAI-compatible `/embeddings`, Ollama `/api/embed`) show their model, inputs, vectors and prompt
   tokens; runs of 3+ (e.g. ingesting documents for RAG) fold into one group, in the cards and in the sequence view.
 
+## Color schemes
+
+Next to light / dark (◐), 🌱 switches to the **Spring** color scheme: spring.io's brand green and dark slate, with the
+Spring AI logo in the header (in its light- or dark-background variant). Both schemes come in light and dark, and the
+choice is remembered per browser.
+
 ## Sequence view and linked agents
 
 Each run has a **Cards | Sequence** toggle. The sequence view draws the run as lanes (app, advisors, sub-agents, each

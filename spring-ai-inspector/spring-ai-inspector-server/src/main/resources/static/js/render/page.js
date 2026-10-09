@@ -76,7 +76,9 @@ export function renderMain() {
  */
 export function updateStickyOffsets() {
 	const replayBar = document.getElementById('replay');
-	const top = document.querySelector('.topbar').offsetHeight + (replayBar.hidden ? 0 : replayBar.offsetHeight);
+	const header = document.querySelector('.topbar').offsetHeight; // e.g. taller with the Spring scheme's logo and line
+	document.documentElement.style.setProperty('--header-h', header + 'px');
+	const top = header + (replayBar.hidden ? 0 : replayBar.offsetHeight);
 	document.documentElement.style.setProperty('--pin-top', top + 'px');
 	const pinned = document.querySelector('.tokens.pinned');
 	document.documentElement.style.setProperty('--seq-top', top + (pinned ? pinned.offsetHeight : 0) + 'px');

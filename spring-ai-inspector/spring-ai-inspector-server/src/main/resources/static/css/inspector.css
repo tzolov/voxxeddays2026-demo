@@ -52,7 +52,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- layout ---------- */
 .layout { display: grid; grid-template-columns: 17rem minmax(0, 1fr); min-height: calc(100vh - 3rem); }
-.sidebar { border-right: 1px solid var(--line); padding: .75rem; overflow: auto; max-height: calc(100vh - 3rem); position: sticky; top: 3rem; }
+.sidebar { border-right: 1px solid var(--line); padding: .75rem; overflow: auto; max-height: calc(100vh - var(--header-h, 3rem)); position: sticky; top: var(--header-h, 3rem); }
 .layout.collapsed { grid-template-columns: minmax(0, 1fr); }
 .layout.collapsed .sidebar { display: none; }
 .sidebar h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: .25rem .25rem .5rem; }
@@ -96,7 +96,7 @@ code, pre, .mono { font-family: var(--mono); }
 .file-row { display: flex; gap: .5rem; align-items: center; font-family: var(--mono); font-size: .85rem; }
 
 /* ---------- replay ---------- */
-.replay { position: sticky; top: 3rem; z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .5rem 1rem;
+.replay { position: sticky; top: var(--header-h, 3rem); z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .5rem 1rem;
 	background: var(--accent-soft); border-bottom: 1px solid var(--accent); color: var(--text); font-size: .9rem; }
 .replay[hidden] { display: none; }
 .replay .progress { flex: 1; min-width: 8rem; height: .35rem; background: var(--line); border-radius: 999px; overflow: hidden; }
@@ -325,3 +325,62 @@ details.s1-state .s1-state-preview { opacity: .85; }
 .hits-line .col-title { margin: 0 .25rem 0 0; }
 .hits-line .chip[data-goto] { cursor: pointer; }
 .hits-line .chip[data-goto]:hover { border-color: var(--user); color: var(--user); }
+
+/* ---------- Spring color scheme (optional, 🌱 in the top bar): spring.io's colors and logo ---------- */
+/* Brand green #6DB33F and the dark slate #191E1E of spring.io; role colors kept distinct from the
+   brand green (tools in teal), so arrows and badges still tell model, tool, Jev and vector store apart. */
+:root[data-palette="spring"] {
+	--bg: #f4f6f3; --panel: #ffffff; --panel-2: #eef3ea; --line: #d9e2d4; --text: #191e1e; --muted: #5b6862;
+	--accent: #3f7f1d; --accent-soft: #e6f2dc;
+	--user: #2667b3; --user-soft: #e5eefa; --assistant: #b85c1c; --assistant-soft: #fbeee2;
+	--system: #6f4bb0; --system-soft: #efe9fa; --tool: #0d7c84; --tool-soft: #def3f3;
+	--added: #3f7f1d; --added-soft: #e6f2dc; --removed: #b4232c; --removed-soft: #fbe5e6;
+	--warn: #8f6400; --warn-soft: #fbf1d6;
+	--j-key: #6f4bb0; --j-str: #3f7f1d; --j-num: #b85c1c; --j-lit: #2667b3;
+	--sans: "Open Sans", "Metropolis", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	--brand: #6db33f;
+	--on: #3f7f1d; --on-text: #ffffff; /* active buttons: white on a dark green, readable (≈5:1) */
+}
+@media (prefers-color-scheme: dark) {
+	:root[data-palette="spring"]:not([data-theme="light"]) {
+		--bg: #191e1e; --panel: #222929; --panel-2: #2a3232; --line: #38433f; --text: #eef2ef; --muted: #9eaba4;
+		--accent: #6db33f; --accent-soft: #24331b;
+		--user: #7fb0ff; --user-soft: #1b2a40; --assistant: #f2a265; --assistant-soft: #3a2618;
+		--system: #c4a3f4; --system-soft: #2c2240; --tool: #4fd0c6; --tool-soft: #13302f;
+		--added: #8fd36a; --added-soft: #24331b; --removed: #ff8a8f; --removed-soft: #3d1a1c;
+		--warn: #f1c35b; --warn-soft: #382c10;
+		--j-key: #c4a3f4; --j-str: #8fd36a; --j-num: #f2a265; --j-lit: #7fb0ff;
+		--on: #6db33f; --on-text: #191e1e; /* active buttons: slate on the brand green (≈7:1) */
+	}
+}
+:root[data-palette="spring"][data-theme="dark"] {
+	--bg: #191e1e; --panel: #222929; --panel-2: #2a3232; --line: #38433f; --text: #eef2ef; --muted: #9eaba4;
+	--accent: #6db33f; --accent-soft: #24331b;
+	--user: #7fb0ff; --user-soft: #1b2a40; --assistant: #f2a265; --assistant-soft: #3a2618;
+	--system: #c4a3f4; --system-soft: #2c2240; --tool: #4fd0c6; --tool-soft: #13302f;
+	--added: #8fd36a; --added-soft: #24331b; --removed: #ff8a8f; --removed-soft: #3d1a1c;
+	--warn: #f1c35b; --warn-soft: #382c10;
+	--j-key: #c4a3f4; --j-str: #8fd36a; --j-num: #f2a265; --j-lit: #7fb0ff;
+	--on: #6db33f; --on-text: #191e1e;
+}
+
+/* The header: the Spring AI logo (its light- or dark-background variant) and "Inspector". */
+.brand-logo { display: none; height: 1.7rem; width: auto; }
+:root[data-palette="spring"] .brand-logo.on-light { display: block; }
+:root[data-palette="spring"] .brand-prefix { display: none; }
+:root[data-palette="spring"] .brand-name { font-weight: 600; color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+	:root[data-palette="spring"]:not([data-theme="light"]) .brand-logo.on-light { display: none; }
+	:root[data-palette="spring"]:not([data-theme="light"]) .brand-logo.on-dark { display: block; }
+}
+:root[data-palette="spring"][data-theme="dark"] .brand-logo.on-light { display: none; }
+:root[data-palette="spring"][data-theme="dark"] .brand-logo.on-dark { display: block; }
+
+/* spring.io touches: a green line under the header, green active buttons, brand-green live dot. */
+:root[data-palette="spring"] .topbar { border-bottom: 3px solid var(--brand); }
+:root[data-palette="spring"] .btn { border-radius: .3rem; }
+:root[data-palette="spring"] .seg .btn { border-radius: 0; } /* segmented toggles keep square inner corners */
+:root[data-palette="spring"] .btn.on { background: var(--on); border-color: var(--on); color: var(--on-text); }
+:root[data-palette="spring"] .brand .dot.live { background: var(--brand); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* The scheme's own toggle: a light green, so its 🌱 stays visible. */
+:root[data-palette="spring"] #palette.on { background: var(--accent-soft); border-color: var(--brand); }
