@@ -51,6 +51,16 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	/** Open CLIENT calls on this thread, so nested ChatClient calls (sub-agents) form a tree. */
 	private static final ThreadLocal<Deque<String>> OPEN_CALLS = ThreadLocal.withInitial(ArrayDeque::new);
 
+	/**
+	 * Tool runs in progress on this thread, innermost first, with the call that ran each, so a
+	 * ChatClient call made by a tool (a sub-agent) names the tool that started it.
+	 */
+	private static final ThreadLocal<Deque<ToolRun>> OPEN_TOOLS = ThreadLocal
+		.withInitial(java.util.concurrent.ConcurrentLinkedDeque::new);
+
+	record ToolRun(String toolId, String clientCallId) {
+	}
+
 	private final InspectorClient client;
 
 	private final Phase phase;
@@ -60,6 +70,25 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	/** The innermost ChatClient call running on this thread, if any. */
 	static String currentCallId() {
 		return OPEN_CALLS.get().peek();
+	}
+
+	/**
+	 * A tool run starting on this thread. Returns the thread's open tool runs, from which the
+	 * run is removed when it ends, even if its end is observed on another thread.
+	 */
+	static Deque<ToolRun> toolStarted(String toolId) {
+		Deque<ToolRun> open = OPEN_TOOLS.get();
+		open.push(new ToolRun(toolId, currentCallId()));
+		return open;
+	}
+
+	/**
+	 * The tool run that a call made now with this parent was started by: the innermost tool
+	 * running on this thread, if the parent call ran it (not some outer call's tool).
+	 */
+	static String parentToolId(String parentId) {
+		ToolRun tool = parentId == null ? null : OPEN_TOOLS.get().peek();
+		return tool != null && parentId.equals(tool.clientCallId()) ? tool.toolId() : null;
 	}
 
 	public InspectorAdvisor(InspectorClient client, Phase phase) {
@@ -93,8 +122,12 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			request = request.mutate().context(CALL_ID, callId).build();
 			ChatClientRequest clientRequest = request;
 			String parentId = open.peek();
+			String parentToolId = parentToolId(parentId);
 			this.client.send("client-request", () -> {
 				Map<String, Object> event = requestEvent(callId, parentId, clientRequest, advisorNames(chain));
+				if (parentToolId != null) {
+					event.put("parentToolId", parentToolId);
+				}
 				List<Map<String, Object>> rag = InspectorRagDescriber.describe(chain.getCallAdvisors());
 				if (!rag.isEmpty()) {
 					event.put("rag", rag);
@@ -128,6 +161,8 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		finally {
 			if (this.phase == Phase.CLIENT) {
 				open.remove(callId);
+				// A tool whose end was never observed must not name later calls' sub-agents.
+				OPEN_TOOLS.get().removeIf(t -> callId.equals(t.clientCallId()));
 			}
 		}
 	}

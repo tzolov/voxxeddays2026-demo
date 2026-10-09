@@ -8,8 +8,10 @@ import { readFileSync } from 'node:fs';
 
 import { state } from '../../main/resources/static/js/state.js';
 import { handle } from '../../main/resources/static/js/model.js';
-import { ADAPTERS, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
-import { diffTools, renderCall, renderItems } from '../../main/resources/static/js/render/cards.js';
+import { ADAPTERS, adapterOf, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
+import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
+import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
+import { runTotals } from '../../main/resources/static/js/render/page.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
@@ -25,6 +27,20 @@ function load(name) {
 }
 
 const runOf = (runs, app) => runs.find((r) => r.app.startsWith(app));
+
+/** The card with this key in rendered HTML, with everything nested inside it. */
+function cardOf(html, key) {
+	const at = html.indexOf(`data-key="${key}"`);
+	if (at < 0) return null;
+	const re = /<details\b|<\/details>/g;
+	re.lastIndex = html.lastIndexOf('<details', at);
+	let depth = 0;
+	for (let m; (m = re.exec(html));) {
+		depth += m[0] === '</details>' ? -1 : 1;
+		if (!depth) return html.slice(html.lastIndexOf('<details', at), re.lastIndex);
+	}
+	return null;
+}
 const topCalls = (run) => run.items.filter((i) => i.kind === 'call').map((i) => i.ref);
 
 beforeEach(() => {
@@ -79,7 +95,10 @@ test('tools: tool runs sit between the round-trips that requested and consumed t
 	const [run] = load('tools');
 	const [call] = topCalls(run);
 
-	assert.deepEqual(call.items.map((i) => i.kind), ['wire', 'tool', 'tool', 'wire']);
+	assert.deepEqual(call.items.map((i) => i.kind).filter((k) => k !== 'model'), ['wire', 'tool', 'tool', 'wire']);
+	// The advisor's model calls are recorded on the wire here, so they aren't shown again.
+	assert.doesNotMatch(renderCall(call, true), /no HTTP/);
+	assert.equal(runTotals(run).trips, 2);
 	assert.ok(call.wires.every((w) => usageOf(w).input > 0));
 	assert.match(renderCall(call, true), /getTemperature/);
 
@@ -98,6 +117,392 @@ test('a round-trip whose response was never recorded ends its bar with the call'
 	const model = lanes.find((l) => l.kind === 'model').key;
 
 	assert.equal(acts.find((a) => a.lane === model && a.from === call.wires[0].req.seq).to, call.resp.seq);
+});
+
+test('MCP tools show their connection and get a lane per MCP connection', () => {
+	let first = true;
+	const mcp = { connection: 'poet-server', server: 'mcp-server-voxxeddays-2026', serverVersion: '0.0.1', tool: 'getTemperature' };
+	// The first call comes from an MCP server, the second is a local tool of the same name.
+	fixture('tools').map((e) => e.type === 'tool-start' && first && !(first = false) ? { ...e, mcp } : e).forEach(handle);
+	const run = [...state.runs.values()][0];
+	const html = renderCall(topCalls(run)[0], true);
+
+	assert.match(html, /<span class="pill mcp" title="MCP connection: poet-server\nserver: mcp-server-voxxeddays-2026 0\.0\.1\ntool: getTemperature">MCP · poet-server<\/span>/);
+	const tools = buildSequence(run).lanes.filter((l) => l.kind === 'tool').map((l) => [l.label, l.sub]);
+	assert.deepEqual(tools, [['poet-server', 'MCP · mcp-server-voxxeddays-2026'], ['Tools', '']]);
+});
+
+// A run where an MCP tool's server logs, asks the client to sample (answered by a nested ChatClient
+// call), logs again and returns; MCP messages are posted in the background, so some arrive late.
+function mcpToolRunEvents() {
+	const conn = 'poet-server';
+	const events = fixture('tools');
+	const runId = events[0].runId; const callId = events[1].callId; const toolId = events[6].toolId;
+	const base = events[6].ts - 700; // timestamps on the fixture's timeline: seq 7 is the tool's start
+	const msg = (seq, direction, kind, method, id, body, extra = {}) => ({ type: 'mcp-message', runId, seq, ts: base + Math.round(seq * 100),
+		connection: conn, direction, kind, method, id, payload: { jsonrpc: '2.0', id, ...body }, ...extra });
+	const at = (seq, e) => ({ ...e, runId, seq, ts: base + Math.round(seq * 100) });
+	const handshake = [
+		// Older recordings carry the payload as a JSON string.
+		{ ...msg(2.1, 'out', 'request', 'initialize', 0, {}), payload: JSON.stringify({ method: 'initialize', params: { protocolVersion: '2025-06-18' } }) },
+		msg(2.2, 'in', 'response', 'initialize', 0, { result: { protocolVersion: '2025-06-18', serverInfo: { name: 'mcp-server-voxxeddays-2026', version: '0.0.1' } } }),
+		msg(2.3, 'out', 'request', 'tools/list', 1, {}),
+		msg(2.4, 'in', 'response', 'tools/list', 1, { result: { tools: [{ name: 'hello' }, { name: 'getTemperature' }] } }),
+	].map((e) => ({ ...e, ts: events[1].ts }));
+	const duringTool = [
+		msg(7.1, 'out', 'request', 'tools/call', 2, { params: { name: 'getTemperature', arguments: {} } }, { toolId }),
+		at(7.4, { type: 'client-request', callId: 'sampling-call', parentId: callId, parentInferred: true, messages: [{ role: 'user', text: 'Write a poem' }] }),
+		at(7.5, { type: 'client-response', callId: 'sampling-call', generations: [{ role: 'assistant', text: 'A poem' }] }),
+		msg(7.2, 'in', 'notification', 'notifications/message', undefined, { params: { level: 'info', data: 'Start sampling' } }, { toolId }),
+		msg(7.3, 'in', 'request', 'sampling/createMessage', 0, { params: { messages: [{ role: 'user', content: { type: 'text', text: 'Write a poem' } }] } }, { toolId }),
+		msg(7.6, 'out', 'response', 'sampling/createMessage', 0, { result: { content: { type: 'text', text: 'A poem' } } }, { toolId }),
+	];
+	// Arriving after the tool's end: a log recorded after the sampling call, and the tools/call result.
+	const late = [msg(8.4, 'in', 'notification', 'notifications/message', undefined, { params: { level: 'info', data: 'Done' } }, { toolId, ts: base + 760 }),
+		msg(8.5, 'in', 'response', 'tools/call', 2, { result: { content: [{ type: 'text', text: '12°C' }] } }, { toolId, ts: base + 790 })];
+	let tagged = false;
+	const tag = (e) => (e.type === 'tool-start' && !tagged && (tagged = true) ? { ...e, mcp: { connection: conn, server: 'mcp-server-voxxeddays-2026', tool: 'getTemperature' } } : e);
+	return { conn, toolId, events: [...events.slice(0, 2), ...handshake, ...events.slice(2, 7).map(tag), ...duringTool, events[7], ...late, ...events.slice(8)] };
+}
+
+test('MCP messages: the handshake belongs to the connection, the rest to the MCP tool run the starter attributed', () => {
+	const { conn, toolId, events } = mcpToolRunEvents();
+	events.forEach(handle);
+	const run = [...state.runs.values()][0];
+	const tool = run.tools.get(toolId);
+
+	assert.deepEqual(tool.mcp.map((m) => `${m.kind} ${m.method}`), ['request tools/call', 'notification notifications/message',
+		'request sampling/createMessage', 'response sampling/createMessage', 'notification notifications/message', 'response tools/call']);
+	assert.deepEqual(run.mcp.get(conn).map((m) => m.method), ['initialize', 'initialize', 'tools/list', 'tools/list']);
+
+	const panel = renderMcpPanel(run);
+	assert.match(panel, /mcp-server-voxxeddays-2026 0\.0\.1/);
+	assert.match(panel, /protocol 2025-06-18/);
+	assert.match(panel, /2 tools/);
+	const card = renderTool(tool);
+	assert.match(card, /6 MCP msgs/);
+	assert.match(card, /info: Start sampling/);
+	assert.match(card, /<b>tools\/call ✓<\/b><span class="muted">#2<\/span>\s*<span class="mcp-sum">12°C<\/span>/);
+
+	// Notes are placed by when they were recorded: before and after the sampling call, inside the tool run.
+	const { lanes, msgs } = buildSequence(run);
+	const sampling = run.calls.get('sampling-call');
+	const before = msgs.find((m) => m.note === 'info: Start sampling'); const after = msgs.find((m) => m.note === 'info: Done');
+	assert.ok(before.seq > tool.start.seq && before.seq < sampling.req.seq, 'the first log comes before the sampling call');
+	assert.ok(after.seq > sampling.resp.seq && after.seq < tool.end.seq, 'the late log comes after it, still inside the tool run');
+	assert.ok(lanes.some((l) => l.label === 'MCP sampling' && l.sub === 'for poet-server'));
+	assert.ok(!lanes.some((l) => l.label === 'Sub-agent'));
+});
+
+test('a replayed MCP run keeps its sampling lane and its MCP response times', () => {
+	// Replay feeds every event at replay time, in recorded order, keeping the recorded time apart.
+	mcpToolRunEvents().events.forEach((e, i) => handle({ ...e, ts: 9_000_000_000_000 + i * 1000, recordedTs: e.ts }));
+	const run = [...state.runs.values()][0];
+
+	assert.ok(buildSequence(run).lanes.some((l) => l.label === 'MCP sampling'));
+	assert.match(renderTool([...run.tools.values()][0]), /sampling\/createMessage ✓<\/b><span class="muted">#0<\/span>\s*<span class="mcp-sum">A poem<\/span>\s*<span class="right-meta">30 ms<\/span>/);
+});
+
+test('an MCP tool without a connection name is still drawn on an MCP lane, named like its badge', () => {
+	let first = true;
+	fixture('tools').map((e) => e.type === 'tool-start' && first && !(first = false) ? { ...e, mcp: { server: 'weather-mcp' } } : e).forEach(handle);
+	const run = [...state.runs.values()][0];
+
+	assert.match(renderCall(topCalls(run)[0], true), />MCP · weather-mcp<\/span>/);
+	assert.ok(buildSequence(run).lanes.some((l) => l.kind === 'tool' && l.label === 'weather-mcp' && l.sub === 'MCP · weather-mcp'));
+});
+
+test('a model making no HTTP calls (e.g. in the JVM) is shown from the advisor: cards, tokens, sequence', () => {
+	// The same run without its HTTP round-trips, as a jinfer model would leave it.
+	fixture('tools').filter((e) => !e.type.startsWith('wire-'))
+		.map((e) => (e.type === 'model-request' ? { ...e, options: { ...e.options, type: 'JinferChatOptions', model: 'LFM2.5-8B' } } : e))
+		.forEach(handle);
+	const run = [...state.runs.values()][0];
+	const [call] = topCalls(run);
+
+	const html = renderCall(call, true);
+	assert.equal((html.match(/ChatModel call · no HTTP/g) || []).length, 2);
+	assert.match(html, /<span class="pill" title="Seen by the advisor[^"]*">jinfer<\/span>/);
+	assert.match(html, /<span class="pill">claude-sonnet-4-6<\/span>/); // the model that answered
+	assert.match(html, /⚙ getTemperature/);
+	assert.match(html, /2 model calls without HTTP · 2 tool runs/);
+	assert.match(html, /1,565 in · 400 out · 2 round-trips/); // the call's own numbers include them too
+	assert.deepEqual(runTotals(run), { input: 1565, output: 400, trips: 2 });
+	// An unrelated HTTP round-trip during a model call (e.g. a systemOne check) doesn't hide it: the proxy
+	// stamps each round-trip with the model call it served, and this one served none.
+	const mc = [...run.modelCalls.values()][0];
+	handle({ type: 'wire-request', runId: run.id, seq: mc.req.seq + 0.1, ts: mc.req.ts + 1, wireId: 'jev', clientCallId: call.id,
+		provider: 'typesafe', method: 'POST', path: '/v1/systemone', url: 'u', headers: {}, body: '{}' });
+	assert.equal(runTotals(run).trips, 3);
+	assert.equal((renderCall(call, true).match(/ChatModel call · no HTTP/g) || []).length, 2);
+	// Every model with round-trips has a row, also the systemOne one reporting no usage (yet).
+	assert.deepEqual(tokensByModel(run).rows.map((r) => [r.provider, r.model, r.input, r.calls, r.reported]),
+		[['jinfer', 'claude-sonnet-4-6', 1565, 2, 2], ['typesafe', 'typesafe', 0, 1, 0]]);
+	const { lanes, msgs } = buildSequence(run);
+	assert.ok(lanes.some((l) => l.kind === 'model' && l.label === 'claude-sonnet-4-6' && l.sub === 'jinfer'));
+	assert.ok(msgs.some((m) => m.label === '#1 · 1 msgs · no HTTP'));
+	assert.ok(msgs.some((m) => /^tool_use getTemperature, getTemperature · /.test(m.label)));
+});
+
+test("a routed provider's model calls are never shown as without HTTP, even when one went unstamped", () => {
+	// Overlapping model calls can leave one without the proxy's stamp; its provider is routed, so it's on the wire.
+	fixture('tools').filter((e) => !e.type.startsWith('wire-'))
+		.map((e) => (e.type === 'run-start' ? { ...e, routed: ['anthropic'] } : e)).forEach(handle);
+	const run = [...state.runs.values()][0];
+
+	assert.doesNotMatch(renderCall(topCalls(run)[0], true), /no HTTP/);
+	assert.equal(runTotals(run).trips, 0);
+});
+
+test('a provider routed by a name of its own is recognized by its API path', () => {
+	assert.equal(adapterOf(wire('groq', '/openai/v1/chat/completions', { messages: [] }, '{}')), ADAPTERS.openai);
+	assert.equal(adapterOf(wire('groq', '/openai/v1/embeddings', { input: 'x' }, '{}')).kind, 'embedding');
+	assert.equal(adapterOf(wire('anthropic', '/v1/models', {}, '{}')), null); // a known provider's other endpoints stay raw
+});
+
+test('vector store adds and searches enclose the embedding calls they make, from whoever made them', () => {
+	// As 10-1 runs it: the first call indexes its tools (one embedding call per tool), then a tool search embeds its query.
+	let seq = 0; const ev = (e) => handle({ runId: 'ts', seq: ++seq, ...e });
+	const embed = (id, ts, input) => {
+		ev({ type: 'wire-request', ts, wireId: id, clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+			headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: [input] }) });
+		ev({ type: 'wire-response', ts: ts + 5, wireId: id, status: 200, durationMs: 5, headers: {}, body: JSON.stringify({ data: [{ embedding: [0, 1] }] }) });
+	};
+	ev({ type: 'run-start', ts: 1000, app: '10-1 · App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	['probe', 'weather', 'clothing', 'currentTime'].forEach((t, i) => embed('e' + i, 1010 + 10 * i, t));
+	ev({ type: 'vector-add', ts: 1050, clientCallId: 'c1', store: 'SimpleVectorStore', count: 3, durationMs: 45 });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	embed('q', 1110, 'tool to get the time');
+	ev({ type: 'vector-search', ts: 1130, clientCallId: 'c1', store: 'SimpleVectorStore', query: 'tool to get the time', results: [{ score: 0.8 }], durationMs: 30 });
+	ev({ type: 'tool-end', ts: 1140, toolId: 't1', result: '["currentTime"]', durationMs: 40 });
+	ev({ type: 'client-response', ts: 1200, callId: 'c1', generations: [{ role: 'assistant', text: 'ok' }] });
+	const run = state.runs.get('ts');
+	const call = topCalls(run)[0];
+
+	assert.deepEqual(call.items.filter((i) => i.kind === 'ingest').length, 1, 'the add belongs to the call that made it');
+	// In the cards: the add (with its embedding calls) before the tool, the search inside the tool's card.
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id });
+	const [add, tool, search] = ['add 3 chunks', 'data-key="tool:t1"', '“tool to get the time”'].map((x) => cards.indexOf(x));
+	assert.ok(add >= 0 && add < tool && tool < search, 'add, then the tool with its search inside');
+	assertArrowsOpenTheirCards(run);
+	const toolCard = renderTool(call.items.find((i) => i.kind === 'tool').ref, 'NESTED', '<span class="pill">🔎 searching…</span>');
+	assert.match(toolCard, /<div class="pane on" style="padding-top:0">NESTED<\/div>/);
+	assert.match(toolCard, /<summary>[\s\S]*🔎 searching…[\s\S]*<\/summary>/, 'what runs inside, on the collapsed card');
+	const { lanes, msgs } = buildSequence(run);
+	const name = (key) => lanes.find((l) => l.key === key).label;
+	const arrows = msgs.map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`);
+	assert.deepEqual(arrows.slice(1, 6), [
+		'Advisors → Vector store: ingest 3 chunks',
+		'Vector store → text-embedding-ada-002: 4 embedding calls · 4 inputs',
+		'text-embedding-ada-002 → Vector store: 4 vectors · 35 ms',
+		'Vector store → Advisors: 3 stored · 45 ms',
+		'Advisors → Tools: toolSearchTool({})']);
+	assert.deepEqual(arrows.slice(6, 10), [
+		'Tools → Vector store: 🔎 tool to get the time',
+		'Vector store → text-embedding-ada-002: #5 · embed 1 input',
+		'text-embedding-ada-002 → Vector store: 1 vector · 5 ms',
+		'Vector store → Tools: 1 hit · best 0.800 · 30 ms']);
+});
+
+test('a vector store add reported when it starts is drawn live: the diagram only grows', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'live', seq: ++seq, ...e });
+	const embed = (id, ts) => {
+		ev({ type: 'wire-request', ts, wireId: id, provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+			headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: ['chunk'] }) });
+		ev({ type: 'wire-response', ts: ts + 5, wireId: id, status: 200, durationMs: 5, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	};
+	const arrows = () => {
+		const { lanes, msgs } = buildSequence(state.runs.get('live'));
+		const name = (key) => lanes.find((l) => l.key === key).label;
+		return msgs.map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`);
+	};
+	ev({ type: 'run-start', ts: 1000, app: '05-rag · DemoApplication' });
+	ev({ type: 'vector-start', ts: 1000, opId: 'a1', op: 'add', store: 'SimpleVectorStore', count: 52 });
+	[0, 1, 2, 3].forEach((i) => embed('e' + i, 1010 + 10 * i));
+
+	const live = arrows();
+	assert.deepEqual(live, ['DemoApplication → Vector store: ingest 52 chunks',
+		'Vector store → text-embedding-ada-002: 4 embedding calls · 4 inputs', 'text-embedding-ada-002 → Vector store: 4 vectors · 35 ms']);
+	// In the cards: one add card, still running, with the embedding calls inside it.
+	const liveCards = renderItems(state.runs.get('live').items, null);
+	assert.match(liveCards, /^<details class="wire vector-op" data-key="vop:a1" >[\s\S]*add 52 chunks[\s\S]*ingesting…[\s\S]*<b>4 embedding calls<\/b>/);
+
+	ev({ type: 'vector-add', ts: 1060, opId: 'a1', store: 'SimpleVectorStore', count: 52, durationMs: 60 });
+	assert.deepEqual(arrows(), [...live, 'Vector store → DemoApplication: 52 stored · 60 ms']);
+	assert.match(renderItems(state.runs.get('live').items, null), /add 52 chunks<\/span>\s*<span class="arrow">→<\/span><span class="pill">52 stored<\/span><span class="right-meta">60 ms<\/span>/);
+});
+
+test('an embedding model running in the JVM is shown from its embedding calls, and not twice for a remote one', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'jinfer', seq: ++seq, ...e });
+	const embed = (id, ts, n) => ev({ type: 'embedding-call', ts, embeddingId: id, clientCallId: 'c1', provider: 'jinfer', model: 'Qwen3-Embedding-0.6B',
+		inputs: n, sample: ['toolDescription: weather'], vectors: n, dimensions: 1024, durationMs: 50 });
+	ev({ type: 'run-start', ts: 1000, app: 'jinfer-tool-search-demo · App', routed: ['groq', 'openai'] });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	ev({ type: 'vector-start', ts: 1001, opId: 'a1', op: 'add', clientCallId: 'c1', store: 'SimpleVectorStore', count: 26 });
+	[0, 1, 2].forEach((i) => embed('e' + i, 1100 + 100 * i, 1));
+	ev({ type: 'vector-add', ts: 1400, opId: 'a1', clientCallId: 'c1', store: 'SimpleVectorStore', count: 26, durationMs: 399 });
+	const run = state.runs.get('jinfer');
+
+	const { lanes, msgs } = buildSequence(run);
+	const name = (key) => lanes.find((l) => l.key === key).label;
+	assert.deepEqual(msgs.slice(1).map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`), [
+		'Advisors → Vector store: ingest 26 chunks',
+		'Vector store → Qwen3-Embedding-0.6B: 3 embedding calls · 3 inputs',
+		'Qwen3-Embedding-0.6B → Vector store: 3 vectors · 250 ms',
+		'Vector store → Advisors: 26 stored · 399 ms']);
+	assert.ok(lanes.some((l) => l.label === 'Qwen3-Embedding-0.6B' && l.sub === 'jinfer'));
+	const html = renderCall(topCalls(run)[0], true);
+	assert.match(html, /EmbeddingModel call · no HTTP/);
+	assert.match(html, /3 embedding calls without HTTP/);
+	assert.equal(runTotals(run).trips, 3);
+
+	// An in-JVM embedding overlapping another provider's HTTP one is still shown.
+	ev({ type: 'wire-request', ts: 1500, wireId: 'other', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['y'] }) });
+	ev({ type: 'embedding-call', ts: 1520, embeddingId: 'tf', clientCallId: 'c1', provider: 'transformers', inputs: 1, vectors: 1, durationMs: 40 });
+	assert.equal(runTotals(run).trips, 5);
+	// The embedding model reports no token usage: it still has its row, with its trips and no numbers.
+	const embedRow = tokensByModel(run).rows.find((r) => r.model === 'Qwen3-Embedding-0.6B');
+	assert.deepEqual([embedRow.calls, embedRow.reported], [3, 0]);
+	assert.match(renderTokenPanel(run), /Qwen3-Embedding-0\.6B[\s\S]*?<span class="tok-num">–<\/span><span class="tok-num">–<\/span>\s*<span class="tok-extra">no token usage reported<\/span><span class="tok-num">3<\/span>/);
+	// A routed provider's embedding calls are on the wire (here under the route's name, groq): not added again.
+	ev({ type: 'embedding-call', ts: 1600, embeddingId: 'routed', clientCallId: 'c1', provider: 'openai', inputs: 1, vectors: 1, durationMs: 40 });
+	assert.equal(runTotals(run).trips, 5);
+	// A failed in-process embedding says so in the sequence.
+	ev({ type: 'embedding-call', ts: 1700, embeddingId: 'fail', clientCallId: 'c1', provider: 'jinfer', inputs: 1, durationMs: 5,
+		error: 'IllegalStateException: model not loaded' });
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '⚠ IllegalStateException: model not loaded'));
+	assert.equal(runTotals(run).trips, 6);
+	// A remote embedding model's call is on the wire already: its embedding-call event adds nothing.
+	ev({ type: 'wire-request', ts: 2000, wireId: 'w1', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['x'] }) });
+	ev({ type: 'wire-response', ts: 2040, wireId: 'w1', status: 200, durationMs: 40, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	ev({ type: 'embedding-call', ts: 2045, embeddingId: 'dup', clientCallId: 'c1', provider: 'openai', inputs: 1, vectors: 1, durationMs: 50 });
+	assert.equal(runTotals(run).trips, 7);
+});
+
+test("On the wire shows vector store searches where they ran, with their embedding round-trips inside", () => {
+	// As 05-rag runs it: the question is embedded for the search, then the model answers.
+	let seq = 0; const ev = (e) => handle({ runId: 'rag', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: '05-rag · DemoApplication' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Was Florida hit by Milton?' }] });
+	ev({ type: 'vector-start', ts: 1001, opId: 's1', op: 'search', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'Was Florida hit by Milton?' });
+	ev({ type: 'wire-request', ts: 1010, wireId: 'q', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: ['Was Florida hit by Milton?'] }) });
+	ev({ type: 'wire-response', ts: 1180, wireId: 'q', status: 200, durationMs: 170, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	ev({ type: 'vector-search', ts: 1182, opId: 's1', searchId: 'x', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'Was Florida hit by Milton?',
+		results: [{ score: 0.869, text: 'Six million Floridians…', metadata: { page_number: 5 } }, { score: 0.861, text: 'drop of 84 mb', metadata: { page_number: 3 } }], durationMs: 181 });
+	ev({ type: 'wire-request', ts: 1200, wireId: 'chat', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/chat/completions', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'gpt-5-mini', messages: [{ role: 'user', content: 'q' }] }) });
+	ev({ type: 'client-response', ts: 4200, callId: 'c1', generations: [{ role: 'assistant', text: 'Yes.' }] });
+	const call = topCalls(state.runs.get('rag'))[0];
+
+	const html = renderCall(call, true);
+	const wire = html.slice(html.indexOf('On the wire'));
+	assert.match(wire, /1 vector search · 2 HTTP round-trips/);
+	// The search first, holding its embedding round-trip, then the chat round-trip: the order they ran in.
+	assert.match(wire, /data-key="vop:s1"[\s\S]*“Was Florida hit by Milton\?”[\s\S]*2 hits[\s\S]*best 0\.869[\s\S]*181 ms[\s\S]*data-key="wire:q"[\s\S]*<\/details><div class="hits-line">[\s\S]*<\/details><details class="wire" data-key="wire:chat"/);
+	// Each hit opens the search in the Retrieval step.
+	assert.match(wire, /<span class="chip" data-goto="\[&quot;call:c1&quot;,&quot;search:s1&quot;\]" title="Six million Floridians…">0\.869 · page 5<\/span>/);
+	assert.equal((wire.match(/data-key="wire:q"/g) || []).length, 1, 'shown once, inside the search');
+});
+
+// Every arrow of the sequence opens its card: each key of its path is a card of the Cards view.
+function assertArrowsOpenTheirCards(run) {
+	const cards = topCalls(run).map((c) => renderCall(c, true)).join('');
+	for (const m of buildSequence(run).msgs) {
+		for (const key of m.path) assert.ok(cards.includes(`data-key="${key}"`), `${m.label}: no card ${key}`);
+	}
+}
+
+test("a tool's own round-trips are shown inside its card, e.g. the systemOne check of a Jev tool search", () => {
+	// As 10-1 runs with tool-index-type=jev: the tool search asks Jev which tool fits.
+	let seq = 0; const ev = (e) => handle({ runId: 'jev', seq: ++seq, ...e });
+	const wire = (id, ts, provider, path, body, resp) => {
+		ev({ type: 'wire-request', ts, wireId: id, clientCallId: 'c1', provider, method: 'POST', path, url: 'u', headers: {}, body: JSON.stringify(body) });
+		ev({ type: 'wire-response', ts: ts + 10, wireId: id, status: 200, durationMs: 10, headers: {}, body: JSON.stringify(resp) });
+	};
+	ev({ type: 'run-start', ts: 1000, app: '10-1 · App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	wire('chat1', 1010, 'openai', '/v1/chat/completions', { model: 'gpt-5-mini', messages: [] }, { choices: [{ message: { content: '' }, finish_reason: 'tool_calls' }] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	wire('jev', 1110, 'typesafe', '/v1/systemone', { model: 'jev-latest', state: {}, questions: { best_tool: { type: 'choice' } } },
+		{ answers: { best_tool: { type: 'choice', choice: 'clothing' } } });
+	ev({ type: 'tool-end', ts: 1200, toolId: 't1', result: '["clothing"]', durationMs: 100 });
+	wire('chat2', 1300, 'openai', '/v1/chat/completions', { model: 'gpt-5-mini', messages: [] }, { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] });
+	const call = topCalls(state.runs.get('jev'))[0];
+
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id });
+	const at = (x) => cards.indexOf(x);
+	assert.ok(at('data-key="wire:chat1"') < at('data-key="tool:t1"') && at('data-key="tool:t1"') < at('data-key="wire:jev"')
+		&& at('data-key="wire:jev"') < at('data-key="wire:chat2"'), 'chat, then the tool with its check inside, then chat');
+	const tool = cards.slice(at('data-key="tool:t1"'), at('data-key="wire:chat2"'));
+	assert.match(tool, /<div class="pane on" style="padding-top:0"><details class="wire" data-key="wire:jev"/);
+	assert.equal((cards.match(/data-key="wire:jev"/g) || []).length, 1, 'shown once, inside the tool');
+	// Clicking the systemOne arrow opens the tool's card, where the check is.
+	const arrow = buildSequence(state.runs.get('jev')).msgs.find((m) => m.label === 'systemOne · 1 questions');
+	assert.deepEqual(arrow.path, ['call:c1', 'tool:t1', 'wire:jev']);
+	assertArrowsOpenTheirCards(state.runs.get('jev'));
+});
+
+test('a tool whose end was never recorded holds only what ran before its call ended', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'lost', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'lostTool', arguments: '{}' }); // its end is lost
+	ev({ type: 'wire-request', ts: 1200, wireId: 'inside', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/chat/completions', url: 'u', headers: {}, body: '{}' });
+	ev({ type: 'client-response', ts: 1300, callId: 'c1', generations: [] });
+	ev({ type: 'client-request', ts: 1400, callId: 'c2', messages: [] });
+	const call = topCalls(state.runs.get('lost'))[0];
+	// A later round-trip of the same call, recorded after the call ended (e.g. delivered late), stays outside.
+	handle({ type: 'wire-request', runId: 'lost', seq: ++seq, ts: 1500, wireId: 'after', clientCallId: 'c1', provider: 'openai', method: 'POST',
+		path: '/v1/chat/completions', url: 'u', headers: {}, body: '{}' });
+
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp.seq });
+	const tool = cards.indexOf('data-key="tool:t1"');
+	assert.ok(tool < cards.indexOf('data-key="wire:inside"'), 'inside the tool');
+	assert.match(cards, /<\/details><details class="wire" data-key="wire:after"/, 'after the tool, at top level');
+});
+
+test('a vector store card shows a failure in full, and no "nothing recorded" note while running or failed', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'ops', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'vector-start', ts: 1000, opId: 'a1', op: 'add', store: 'SimpleVectorStore', count: 2 });
+	const running = renderItems(state.runs.get('ops').items, null);
+	assert.match(running, /ingesting…/);
+	assert.doesNotMatch(running, /No embedding round-trips recorded/);
+	const error = 'HttpClientErrorException: 400 Bad Request: ' + 'x'.repeat(200);
+	ev({ type: 'vector-add', ts: 1050, opId: 'a1', store: 'SimpleVectorStore', count: 2, durationMs: 50, error });
+	const failed = renderItems(state.runs.get('ops').items, null);
+	assert.ok(failed.includes(`<div class="notice err">${error}</div>`), 'the whole error');
+	assert.doesNotMatch(failed, /No embedding round-trips recorded/);
+	// A search whose hits carry no scores claims no best score.
+	ev({ type: 'vector-start', ts: 1100, opId: 's1', op: 'search', store: 'SimpleVectorStore', query: 'q' });
+	ev({ type: 'vector-search', ts: 1110, opId: 's1', store: 'SimpleVectorStore', query: 'q', results: [{ text: 'a' }], durationMs: 10 });
+	const run = state.runs.get('ops');
+	const search = renderItems(run.items, null, { searches: run.searches });
+	assert.match(search, /1 hit<\/span>/);
+	assert.doesNotMatch(search, /best/);
+	// Searches outside any ChatClient call are drawn in the sequence too, also without a best score.
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '🔎 q'));
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '1 hit · 10 ms'));
+	// Whether embeddings were recorded is said whatever the search returned: here it has a hit but none.
+	assert.match(search, /data-key="vop:s1"[\s\S]*No embedding round-trips recorded/);
+});
+
+test('a collapsed tool card says what is still running inside it', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'busy', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	ev({ type: 'vector-start', ts: 1110, opId: 's1', op: 'search', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'q' });
+	const call = topCalls(state.runs.get('busy'))[0];
+	const summary = (html) => html.slice(html.indexOf('data-key="tool:t1"'), html.indexOf('</summary>', html.indexOf('data-key="tool:t1"')));
+
+	assert.match(summary(renderItems(call.items, null, { searches: call.searches, callId: call.id })), /🔎 searching…/);
+	ev({ type: 'vector-search', ts: 1120, opId: 's1', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'q', results: [], durationMs: 10 });
+	assert.doesNotMatch(summary(renderItems(call.items, null, { searches: call.searches, callId: call.id })), /searching…/);
 });
 
 test('tools that pass through the advisors stay visible after them', () => {
@@ -129,7 +534,9 @@ test('A2A: the remote agent call is linked under the caller\'s Task tool', () =>
 	const { groups, lanes } = buildSequence(caller);
 	assert.equal([...groups.values()].filter(Boolean).length, 1, 'one remote lane group');
 	assert.ok(lanes.some((l) => l.label === 'airbnb-agent'));
-	assert.match(renderCall(topCalls(caller)[0], true), /1 remote call/);
+	const card = cardOf(renderCall(topCalls(caller)[0], true), 'tool:' + task.id);
+	assert.match(card, /↘ 1 remote agent</);
+	assert.ok(card.includes(`data-key="call:${task.remoteCalls[0].id}"`), 'the remote call is inside the Task card');
 });
 
 test('systemOne served by a local Ollama: the lane shows the model and ollama', () => {
@@ -155,6 +562,44 @@ test('sub-agents: a call made by a tool gets its own lane', () => {
 	const [run] = load('subagent');
 
 	assert.ok(buildSequence(run).lanes.some((l) => l.label === 'Sub-agent' && l.sub === 'via Task'));
+});
+
+test('sub-agents: a call made by a tool is shown inside the tool, in the cards and the sequence', () => {
+	const [run] = load('subagent');
+	const [agent] = topCalls(run);
+	const task = [...run.tools.values()].find((t) => t.start.name === 'Task');
+	const sub = [...run.calls.values()].find((c) => c.parent === agent);
+
+	const html = renderCall(agent, true);
+	const card = cardOf(html, 'tool:' + task.id);
+	assert.ok(card.includes(`data-key="call:${sub.id}"`), 'the sub-agent call is inside the Task card');
+	assert.equal(html.split(`data-key="call:${sub.id}"`).length, 2, 'and nowhere else');
+	assert.match(card, /↘ 1 sub-agent</);
+	assert.match(card, /^<details[^>]* open>/, 'a tool that ran a sub-agent opens by default');
+	// Its arrow opens the Task card first, as for a remote agent.
+	const arrow = buildSequence(run).msgs.find((m) => m.path?.at(-1) === 'call:' + sub.id && !m.ret);
+	assert.deepEqual(arrow.path.slice(-2), ['tool:' + task.id, 'call:' + sub.id]);
+});
+
+test('sub-agents: the tool recorded as the parent wins over timing, e.g. two Task tools running in parallel', () => {
+	let seq = 0;
+	const at = (e) => handle({ runId: 'par', seq: ++seq, ts: 1000 + seq, ...e });
+	at({ type: 'run-start', app: 'parallel · App' });
+	at({ type: 'client-request', callId: 'main', messages: [{ role: 'user', text: 'plan a trip' }] });
+	at({ type: 'tool-start', toolId: 'weather', clientCallId: 'main', name: 'Task', arguments: '{}' });
+	at({ type: 'tool-start', toolId: 'airbnb', clientCallId: 'main', name: 'Task', arguments: '{}' });
+	at({ type: 'client-request', callId: 'sub', parentId: 'main', parentToolId: 'airbnb', messages: [{ role: 'user', text: 'find a flat' }] });
+	at({ type: 'client-response', callId: 'sub', durationMs: 1, generations: [{ role: 'assistant', text: 'a flat' }] });
+	at({ type: 'tool-end', toolId: 'airbnb', durationMs: 3, result: 'a flat' });
+	at({ type: 'tool-end', toolId: 'weather', durationMs: 5, result: 'sunny' });
+	at({ type: 'client-response', callId: 'main', durationMs: 9, generations: [{ role: 'assistant', text: 'done' }] });
+	const run = state.runs.get('par');
+
+	const html = renderCall(run.calls.get('main'), true);
+	assert.ok(cardOf(html, 'tool:airbnb').includes('data-key="call:sub"'));
+	assert.ok(!cardOf(html, 'tool:weather').includes('data-key="call:sub"'), 'not the first tool running at the time');
+	const arrow = buildSequence(run).msgs.find((m) => m.path?.at(-1) === 'call:sub' && !m.ret);
+	assert.ok(arrow.path.includes('tool:airbnb'));
 });
 
 // ---------------------------------------------------------------- provider adapters
@@ -203,6 +648,68 @@ test('openai: merges streamed tool-call fragments and reads DeepSeek reasoning',
 	assert.equal(ADAPTERS.deepseek, ADAPTERS.openai);
 });
 
+test('openai responses: items become a conversation, with the instructions, tools and function calls', () => {
+	const req = {
+		model: 'gpt-6-luna', instructions: 'Use toolSearchTool.', store: false,
+		tools: [{ type: 'function', name: 'toolSearchTool', parameters: { type: 'object' } }],
+		input: [
+			{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'What to wear?' }] },
+			{ type: 'reasoning', id: 'rs_1', summary: [] },
+			{ type: 'function_call', call_id: 'call_1', name: 'toolSearchTool', arguments: '{"query":"weather"}' },
+			{ type: 'function_call_output', call_id: 'call_1', output: '["weather"]' },
+		],
+	};
+	const resp = { status: 'completed', output: [
+		{ type: 'reasoning', id: 'rs_2', summary: [{ type: 'summary_text', text: 'Need the weather.' }] },
+		{ type: 'function_call', call_id: 'call_2', name: 'weather', arguments: '{"location":"Amsterdam"}' }],
+	usage: { input_tokens: 120, input_tokens_details: { cached_tokens: 64 }, output_tokens: 30, output_tokens_details: { reasoning_tokens: 20 } } };
+	const w = wire('openai', '/v1/responses', req, JSON.stringify(resp));
+
+	const n = normRequest(w);
+	assert.equal(n.params.model, 'gpt-6-luna');
+	assert.equal(n.system[0].text, 'Use toolSearchTool.');
+	assert.deepEqual(n.tools.map((t) => t.name), ['toolSearchTool']);
+	// The reasoning and the function call it led to are one assistant turn; the result is named after its call.
+	assert.deepEqual(n.messages.map((m) => m.role), ['user', 'assistant', 'tool']);
+	assert.deepEqual(n.messages[1].blocks.map((b) => b.type), ['thinking', 'tool_use']);
+	assert.equal(n.messages[1].blocks[0].hidden, true);
+	assert.deepEqual(n.messages[2].blocks[0], { type: 'tool_result', id: 'call_1', name: 'toolSearchTool', content: '["weather"]' });
+
+	const r = normResponse(w);
+	assert.equal(r.stop, 'tool_calls');
+	assert.deepEqual(r.usage, { input: 120, output: 30, cacheRead: 64, reasoning: 20 });
+	assert.equal(r.blocks[0].text, 'Need the weather.');
+	assert.deepEqual(r.blocks[1], { type: 'tool_use', id: 'call_2', name: 'weather', input: { location: 'Amsterdam' } });
+
+	const html = renderWire(w);
+	assert.match(html, /<span class="pill">gpt-6-luna<\/span><span class="pill">3 msgs<\/span><span class="pill">1 tools<\/span>/);
+	assert.match(html, /⚙ weather/);
+	assert.match(html, />Conversation<\/button>/);
+	// A plain string input is one user message; a routed provider of another name is recognized by the path.
+	assert.equal(normRequest(wire('azure', '/openai/v1/responses', { input: 'hi' }, '{}')).messages[0].blocks[0].text, 'hi');
+	// A stored item referenced by id has no content in the request: it is not shown as a turn.
+	const ref = normRequest(wire('openai', '/v1/responses', { input: [{ type: 'item_reference', id: 'msg_1' }, { role: 'user', content: 'again' }] }, '{}'));
+	assert.deepEqual(ref.messages.map((m) => m.role), ['user']);
+});
+
+test('openai responses: a streamed response is read from its last lifecycle event', () => {
+	const events = [
+		{ type: 'response.created', response: { status: 'in_progress', output: [] } },
+		{ type: 'response.output_text.delta', delta: 'Wear a ' },
+		{ type: 'response.completed', response: { status: 'completed',
+			output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Wear a T-shirt.' }] }],
+			usage: { input_tokens: 10, output_tokens: 5 } } },
+	].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n`).join('\n');
+	const r = normResponse(wire('openai', '/v1/responses', { model: 'gpt', stream: true, input: [] }, events, 'text/event-stream'));
+	assert.equal(r.stop, 'completed');
+	assert.equal(r.blocks[0].text, 'Wear a T-shirt.');
+	assert.equal(r.usage.output, 5);
+
+	const failed = normResponse(wire('openai', '/v1/responses', { input: [] },
+		JSON.stringify({ error: { type: 'invalid_request_error', message: 'Unknown model' } })));
+	assert.equal(failed.error, 'invalid_request_error: Unknown model');
+});
+
 test('ollama: joins newline-delimited stream chunks', () => {
 	const ndjson = [
 		{ message: { role: 'assistant', content: 'Hel' }, done: false },
@@ -212,6 +719,63 @@ test('ollama: joins newline-delimited stream chunks', () => {
 
 	assert.equal(r.blocks[0].text, 'Hello');
 	assert.deepEqual(r.usage, { input: 4, output: 2 });
+});
+
+test('embeddings: model, inputs, vectors and prompt tokens, for OpenAI and Ollama', () => {
+	const openai = wire('openai', '/v1/embeddings', { model: 'text-embedding-3-small', input: ['a chunk', 'another'] },
+		JSON.stringify({ model: 'text-embedding-3-small', data: [{ embedding: [0.1, 0.2, 0.3] }, { embedding: [0.4, 0.5, 0.6] }], usage: { prompt_tokens: 7, total_tokens: 7 } }));
+	assert.deepEqual(normRequest(openai).inputs, ['a chunk', 'another']);
+	assert.deepEqual({ ...normResponse(openai) }, { model: 'text-embedding-3-small', vectors: 2, dimensions: 3, blocks: [], usage: { input: 7, output: 0 } });
+	const html = renderWire(openai);
+	assert.match(html, /<span class="pill">text-embedding-3-small<\/span><span class="pill">embed 2 inputs<\/span>/);
+	assert.match(html, /2 vectors × 3/);
+	assert.match(html, />Embedding<\/button>/);
+	assert.match(html, /input 2<\/div>\s*<div class="text">another/);
+
+	const ollama = wire('ollama', '/api/embed', { model: 'nomic-embed-text', input: 'one text' },
+		JSON.stringify({ model: 'nomic-embed-text', embeddings: [[1, 2]], prompt_eval_count: 3 }));
+	assert.equal(normResponse(ollama).vectors, 1);
+	assert.equal(usageOf(ollama).input, 3);
+	// Pre-tokenized text is one input; Mistral reports errors without an `error` field.
+	assert.equal(normRequest(wire('openai', '/v1/embeddings', { input: [9906, 1917, 0] }, '{}')).inputs.length, 1);
+	assert.equal(normResponse(wire('mistralai', '/v1/embeddings', { input: 'x' },
+		JSON.stringify({ object: 'error', message: 'Unauthorized', type: 'invalid_request_error' }))).error, 'invalid_request_error: Unauthorized');
+	// A chat round-trip of the same provider is unaffected.
+	assert.equal(adapterOf(wire('openai', '/v1/chat/completions', { messages: [] }, '{}')), ADAPTERS.openai);
+});
+
+test('runs of embedding calls fold into one group, in cards and in the sequence', () => {
+	handle({ type: 'run-start', runId: 'rag', seq: 1, ts: 1000, app: '05-1-modular-rag · DemoApplication' });
+	for (let i = 0; i < 5; i++) {
+		handle({ type: 'wire-request', runId: 'rag', seq: 2 + 2 * i, ts: 1000 + 10 * i, wireId: 'e' + i, provider: 'openai', method: 'POST',
+			path: '/v1/embeddings', url: 'u', headers: {}, body: JSON.stringify({ model: 'text-embedding-3-small', input: ['chunk ' + i] }) });
+		handle({ type: 'wire-response', runId: 'rag', seq: 3 + 2 * i, ts: 1005 + 10 * i, wireId: 'e' + i, status: 200, durationMs: 100, headers: {},
+			body: JSON.stringify({ data: [{ embedding: [0, 1] }], usage: { prompt_tokens: 4 } }) });
+	}
+	const run = state.runs.get('rag');
+
+	const cards = renderItems(run.items, null);
+	assert.match(cards, /<b>5 embedding calls<\/b>\s*<span class="pill">text-embedding-3-small<\/span><span class="pill">5 inputs<\/span>/);
+	assert.match(cards, /20 in/);
+	// The time it took, first request to last response (parallel calls aren't counted twice).
+	assert.match(cards, /#1–#5 · 45 ms/);
+	const { lanes, msgs } = buildSequence(run);
+	assert.deepEqual(msgs.map((m) => m.label), ['5 embedding calls · 5 inputs', '5 vectors · 45 ms']);
+	assert.ok(lanes.some((l) => l.label === 'text-embedding-3-small' && l.sub === 'openai'));
+
+	// Runs only fold per model, the same in both views, so a sequence arrow opens its card group.
+	handle({ type: 'wire-request', runId: 'rag', seq: 20, ts: 2000, wireId: 'other', provider: 'openai', method: 'POST', path: '/v1/embeddings',
+		url: 'u', headers: {}, body: JSON.stringify({ model: 'text-embedding-3-large', input: ['x'] }) });
+	assert.match(renderItems(run.items, null), /<b>5 embedding calls<\/b>[\s\S]*data-key="wire:other"/);
+	assert.deepEqual(buildSequence(run).msgs.map((m) => m.path.at(-1)), ['embed:e0', 'embed:e0', 'wire:other']);
+
+	// The lane heads are drawn in their own (sticky) header, above the diagram.
+	const seq = renderSequence(run, false);
+	assert.match(seq, /<div class="seq-view" data-run="rag">/);
+	const [head, body] = [seq.match(/<div class="seq-head">([\s\S]*?)<\/div>/)[1], seq.match(/<div class="seq-wrap">([\s\S]*?)<\/div>/)[1]];
+	assert.match(head, /lane-head[\s\S]*text-embedding-3-small/);
+	assert.doesNotMatch(body, /lane-head/);
+	assert.match(body, /5 embedding calls/);
 });
 
 test('typesafe: systemOne requests and answers', () => {
@@ -252,6 +816,28 @@ test('answers fold to a one-line preview and remember being opened', () => {
 	assert.match(thinking, /thinking · hidden \(signature only\)/);
 	assert.doesNotMatch(thinking, /msg assistant/);
 	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', toolCalls: [{ name: 'weather', arguments: '{}' }] }, 'k'), /<details/);
+});
+
+test('a long systemOne state is folded to its first lines', () => {
+	const available_tools = Array.from({ length: 30 }, (_, i) => ({ name: 'tool' + i, does: 'does thing ' + i }));
+	const w = wire('typesafe', '/v1/systemone', { model: 'jev-latest', state: { user_request: 'shops open now', available_tools },
+		questions: { best_tool: { type: 'choice', instructions: 'x' } } }, JSON.stringify({ answers: {} }));
+
+	const html = renderWire(w);
+	assert.match(html, /<details class="s1-state" data-key="s1-state:w1" >/);
+	assert.match(html, /state · 125 lines · 2,055 chars/);
+	const preview = html.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1];
+	assert.match(preview, /user_request/);
+	assert.match(preview, /does thing 0/); // the first entry
+	assert.doesNotMatch(preview, /tool1/);
+	assert.match(html, /tool29/); // the full state is there when opened
+	// A few lines holding a long string are folded too, with long preview lines cut.
+	const long = renderWire(wire('typesafe', '/v1/systemone', { state: { user_request: 'x'.repeat(3000) }, questions: {} }, '{}'));
+	assert.match(long, /<details class="s1-state"/);
+	assert.match(long.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1], /x{100,}…/);
+	assert.doesNotMatch(long.match(/<pre class="json s1-state-preview">([\s\S]*?)<\/pre>/)[1], /x{200}/);
+	// A short state stays as it is.
+	assert.doesNotMatch(renderWire(wire('typesafe', '/v1/systemone', { state: { a: 1 }, questions: {} }, '{}')), /s1-state/);
 });
 
 test('noul answers say which way Jev leans, with a band for close calls', () => {

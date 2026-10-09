@@ -18,6 +18,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.Environment;
 
 /**
@@ -56,9 +57,15 @@ public class InspectorAutoConfiguration {
 	}
 
 	@Bean
+	InspectorToolOrigins inspectorToolOrigins() {
+		return new InspectorToolOrigins();
+	}
+
+	@Bean
 	@ConditionalOnClass(ToolCallingObservationContext.class)
-	InspectorToolObservationHandler inspectorToolObservationHandler(InspectorClient client) {
-		return new InspectorToolObservationHandler(client);
+	InspectorToolObservationHandler inspectorToolObservationHandler(InspectorClient client,
+			InspectorToolOrigins origins) {
+		return new InspectorToolObservationHandler(client, origins);
 	}
 
 	/**
@@ -99,12 +106,42 @@ public class InspectorAutoConfiguration {
 
 	}
 
+	/** Reports embedding calls, including those of models running in the JVM (no HTTP to record). */
+	@Bean
+	static InspectorEmbeddingModelPostProcessor inspectorEmbeddingModelPostProcessor(ObjectProvider<InspectorClient> client,
+			Environment environment) {
+		return new InspectorEmbeddingModelPostProcessor(client, environment);
+	}
+
+	/** Tags MCP tools with the MCP connection and server they come from. */
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = "org.springframework.ai.mcp.McpToolNamePrefixGenerator")
+	static class McpInspection {
+
+		@Bean
+		static InspectorMcpToolNamePostProcessor inspectorMcpToolNamePostProcessor(
+				ObjectProvider<InspectorToolOrigins> origins) {
+			return new InspectorMcpToolNamePostProcessor(origins);
+		}
+
+		/** Records the MCP messages of every auto-configured MCP client connection. */
+		@Bean
+		@ConditionalOnClass(name = "org.springframework.ai.mcp.client.common.autoconfigure.NamedClientMcpTransport")
+		static InspectorMcpTransportPostProcessor inspectorMcpTransportPostProcessor(
+				ObjectProvider<InspectorClient> client, ObjectProvider<InspectorToolOrigins> origins) {
+			return new InspectorMcpTransportPostProcessor(client, origins);
+		}
+
+	}
+
 	@Bean
 	RunLifecycle inspectorRunLifecycle(InspectorClient client, Environment env) {
 		return new RunLifecycle(client, env);
 	}
 
 	static class RunLifecycle implements InitializingBean, DisposableBean {
+
+		private static final String UPSTREAM_PREFIX = "spring.ai.inspector.upstream.";
 
 		private final InspectorClient client;
 
@@ -124,13 +161,19 @@ public class InspectorAutoConfiguration {
 				event.put("pid", ProcessHandle.current().pid());
 				// Where the proxy should forward each provider's calls (see InspectorEnvironmentPostProcessor).
 				Map<String, String> upstreams = new LinkedHashMap<>();
-				for (String provider : new String[] { "anthropic", "openai", "ollama", "mistralai", "deepseek", "typesafe" }) {
-					String upstream = this.env.getProperty("spring.ai.inspector.upstream." + provider);
-					if (upstream != null) {
-						upstreams.put(provider, upstream);
+				if (this.env instanceof ConfigurableEnvironment configurable) {
+					for (String key : InspectorEnvironmentPostProcessor.propertyNames(configurable)) {
+						if (key.startsWith(UPSTREAM_PREFIX)) {
+							upstreams.put(key.substring(UPSTREAM_PREFIX.length()), this.env.getProperty(key));
+						}
 					}
 				}
 				event.put("upstreams", upstreams);
+				// Providers whose calls are on the wire: their model and embedding calls aren't shown again.
+				event.put("routed", java.util.Arrays.stream(this.env.getProperty(InspectorEnvironmentPostProcessor.ROUTED, "").split(","))
+					.filter(p -> !p.isBlank())
+					.distinct()
+					.toList());
 				return event;
 			});
 		}

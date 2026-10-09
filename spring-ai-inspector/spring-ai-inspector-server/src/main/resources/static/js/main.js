@@ -2,7 +2,7 @@
 // importable without a browser (see src/test/js).
 import { exportRun, importFiles } from './io.js';
 import { handle } from './model.js';
-import { render } from './render/page.js';
+import { render, syncSequenceHead } from './render/page.js';
 import { replay, startReplay, stepReplay, stopReplay, togglePause } from './replay.js';
 import { pref, savePref, state } from './state.js';
 
@@ -34,6 +34,10 @@ function selectLinkedRun() {
 document.addEventListener('toggle', (e) => {
 	const key = e.target.dataset && e.target.dataset.key;
 	if (key) state.open.set(key, e.target.open);
+}, true);
+// Scroll events don't bubble: listen in the capture phase for the sequence diagram's sideways scroll.
+document.addEventListener('scroll', (e) => {
+	if (e.target.classList?.contains('seq-wrap')) syncSequenceHead(e.target);
 }, true);
 
 document.addEventListener('click', (e) => {
@@ -71,12 +75,20 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 	savePref('sidebar', pref('sidebar', 'open') === 'open' ? 'closed' : 'open');
 	applyPrefs();
 });
+document.getElementById('palette').addEventListener('click', () => {
+	savePref('palette', pref('palette', '') === 'spring' ? '' : 'spring');
+	applyPrefs();
+});
 document.getElementById('clear').addEventListener('click', () => fetch('api/events', { method: 'DELETE' }));
 
 function applyPrefs() {
 	document.documentElement.style.setProperty('--scale', pref('scale', '1'));
 	const theme = pref('theme', '');
 	if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
+	// An optional color scheme next to light / dark: the Spring look (spring.io colors, Spring AI logo).
+	const palette = pref('palette', '');
+	if (palette) document.documentElement.dataset.palette = palette; else delete document.documentElement.dataset.palette;
+	document.getElementById('palette').classList.toggle('on', palette === 'spring');
 	document.getElementById('follow').classList.toggle('on', state.follow);
 	const sidebarOpen = pref('sidebar', 'open') === 'open';
 	document.querySelector('.layout').classList.toggle('collapsed', !sidebarOpen);

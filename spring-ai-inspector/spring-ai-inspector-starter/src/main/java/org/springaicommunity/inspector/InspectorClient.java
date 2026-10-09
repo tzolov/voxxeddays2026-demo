@@ -24,7 +24,8 @@ import org.springframework.ai.util.JsonHelper;
  * call.</li>
  * <li>{@link #send} is synchronous (localhost, ~1ms) so the inspector sees advisor events
  * and wire calls in their real order. {@link #sendAsync} posts from one background thread,
- * in order, for callers that must not block (e.g. Reactor threads).</li>
+ * in order, for callers that must not block (e.g. Reactor threads); {@link #sendLater}
+ * also builds the event there, for payloads too costly to build on such a thread.</li>
  * <li>After a failed post, publishing pauses for {@link #BACKOFF} and then resumes, so a
  * stopped inspector costs at most one short timeout per pause and a restarted one is
  * picked up again.</li>
@@ -81,11 +82,33 @@ public class InspectorClient {
 		}
 	}
 
+	/**
+	 * Like {@link #sendAsync}, but also builds the event on the background thread, for
+	 * payloads that are costly to build (e.g. serializing a large MCP message). The
+	 * timestamp is still taken now; the payload must not depend on the calling thread.
+	 */
+	public void sendLater(String type, Supplier<Map<String, Object>> payload) {
+		long ts = System.currentTimeMillis();
+		if (ts < this.pausedUntil) {
+			return;
+		}
+		this.asyncSender.execute(() -> {
+			String body = build(type, payload, ts);
+			if (body != null) {
+				this.transport.accept(body);
+			}
+		});
+	}
+
 	public void send(String type, Map<String, Object> payload) {
 		send(type, () -> payload);
 	}
 
 	private String build(String type, Supplier<Map<String, Object>> payload) {
+		return build(type, payload, System.currentTimeMillis());
+	}
+
+	private String build(String type, Supplier<Map<String, Object>> payload, long ts) {
 		if (System.currentTimeMillis() < this.pausedUntil) {
 			return null;
 		}
@@ -93,13 +116,29 @@ public class InspectorClient {
 			Map<String, Object> event = new LinkedHashMap<>();
 			event.put("type", type);
 			event.put("runId", this.runId);
-			event.put("ts", System.currentTimeMillis());
+			event.put("ts", ts);
 			event.putAll(payload.get());
 			return this.json.toJson(event);
 		}
 		catch (RuntimeException | LinkageError ex) {
 			return null; // drop the event, never the application's call
 		}
+	}
+
+	/** Waits until the events handed to the background thread so far are posted (tests). */
+	void awaitBackground() {
+		try {
+			this.asyncSender.submit(() -> {
+			}).get();
+		}
+		catch (Exception ex) {
+			// nothing to wait for
+		}
+	}
+
+	/** Cuts long text for an event, marking the cut with an ellipsis. */
+	static String truncate(String text, int max) {
+		return text == null || text.length() <= max ? text : text.substring(0, max) + "…";
 	}
 
 	private void post(String body) {

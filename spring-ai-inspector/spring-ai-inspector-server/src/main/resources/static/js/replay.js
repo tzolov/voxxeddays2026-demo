@@ -27,7 +27,7 @@ export function startReplay(run, speed) {
 
 export function feedOne() {
 	const ev = replay.events[replay.i++];
-	handle({ ...ev, ts: Date.now() });
+	handle({ ...ev, ts: Date.now(), recordedTs: ev.recordedTs ?? ev.ts });
 	return ev;
 }
 

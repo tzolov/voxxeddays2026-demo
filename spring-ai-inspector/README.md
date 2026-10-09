@@ -6,10 +6,26 @@ A live web UI that shows what each demo sends to the model, in three layers:
 2. **After the advisors**: the prompt after memory, RAG, guardrails and other advisors ran. Messages the advisors added or removed are highlighted.
 3. **On the wire**: every raw HTTP round-trip to the model, with request and response JSON, token usage and timing. Anthropic, OpenAI, Ollama, Mistral and DeepSeek traffic is rendered as one readable conversation. TypeSafe Jev
    `systemOne` calls (guardrails, judges, RAG filters) get a questions-and-answers view with the answer probabilities. Messages re-sent from an earlier round-trip are marked `re-sent`, new ones `new`. API keys are redacted.
+   What a tool did while it ran is shown inside its card: the round-trips it made (e.g. the systemOne check of a Jev tool
+   search) and its vector store adds and searches. These appear where they ran, with the embedding round-trips they
+   made inside them and, for a search, its hits, each opening the search in the Retrieval step.
 
 Nested `ChatClient` calls (for example sub-agents) are shown inside the call that triggered them. Tool executions
 (including MCP tools) appear between the round-trips that requested and consumed them, with arguments, result,
-errors and duration.
+errors and duration. MCP tools are tagged with the MCP connection and server they come from (an
+`MCP · <connection>` badge, and a lane per MCP connection in the sequence view). The origins are learned from each
+connection's `tools/list` responses, which covers every MCP tool callback provider, including ones built by hand, and
+from the auto-configured `McpToolNamePrefixGenerator`, which knows the exact names of tools it renames on a clash
+(`alt_<n>_<name>`). An application tool with the same name as an MCP tool is told apart by its description.
+
+The MCP messages themselves are recorded too, by wrapping the MCP client transports Spring AI auto-configures (stdio,
+Streamable HTTP, SSE): every JSON-RPC message in both directions, serialized off the I/O threads, with long strings cut.
+Messages exchanged while an MCP tool runs (the `tools/call`, the server's log and progress notifications, its sampling
+requests and the client's answers) are listed on that tool: a `tools/call` and its response are matched to the tool
+run by tool name and request id, what the server sends in between goes to the connection's latest tool run (MCP does
+not tie it to a request at this level), so parallel calls on one connection can mix logs. Logs and sampling requests also appear as notes on the tool's
+sequence lane, with the `ChatClient` call that answers a sampling request on an "MCP sampling" lane. The rest (`initialize`, `tools/list`, ...) is shown per
+connection in the **MCP connections** panel, with the server's name, version, protocol and tools.
 
 ## RAG and memory
 
@@ -24,13 +40,22 @@ errors and duration.
   summary events marked), and memory files (`spring.ai.inspector.memory-dirs`, defaults to `agent.memory.dir`).
 - Runs of 3+ systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire". systemOne
   round-trips are labelled with who served them, e.g. `typesafe · system-one` or `ollama · system-one`.
+- Embedding calls (OpenAI-compatible `/embeddings`, Ollama `/api/embed`) show their model, inputs, vectors and prompt
+  tokens; runs of 3+ (e.g. ingesting documents for RAG) fold into one group, in the cards and in the sequence view.
+
+## Color schemes
+
+Next to light / dark (◐), 🌱 switches to the **Spring** color scheme: spring.io's brand green and dark slate, with the
+Spring AI logo in the header (in its light- or dark-background variant). Both schemes come in light and dark, and the
+choice is remembered per browser.
 
 ## Sequence view and linked agents
 
 Each run has a **Cards | Sequence** toggle. The sequence view draws the run as lanes (app, advisors, sub-agents, each
 model, systemOne model, tools, vector store) with arrows in time order: requests solid, returns dashed, labelled with message
 counts, `tool_use` names, stop reasons and latencies. **to scale** spaces rows by elapsed time, so the audience sees
-where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane.
+where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane. The
+lane heads stay in view while a long diagram scrolls (under the pinned tokens panel, when it is pinned).
 
 Calls in another JVM are **linked by timing**. When a ChatClient call starts while another run has a tool call open
 (e.g. 18's `Task` tool calling the A2A airbnb-agent), the inspector nests the remote call under that tool, in the Cards
@@ -89,7 +114,8 @@ How the starter hooks in:
   provider base URLs at the inspector's recording proxy (`/r/<runId>/<provider>`):
   - `spring.ai.anthropic.base-url`: always. The proxy forwards to the base-url the app had before (a gateway, a
     mitmweb, ...), or to `https://api.anthropic.com` when none was set.
-  - `spring.ai.openai.base-url`: only if unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
+  - `spring.ai.openai.base-url` and `spring.ai.openai.responses.base-url` (the Responses API client's own): only if both
+    are unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
     `spring.ai.inspector.route.openai=always` routes it anyway, for an OpenAI-compatible endpoint whose base URL ends in `/v1`
     (e.g. Amazon Bedrock mantle).
   - `spring.ai.ollama.base-url`: only if unset or pointing at `localhost:11434`.
@@ -98,6 +124,14 @@ How the starter hooks in:
   - `spring.ai.deepseek.base-url`: only if unset or pointing at `api.deepseek.com`.
   - `spring.ai.typesafe.base-url`: always, like Anthropic. The proxy forwards to the base-url the app had before (e.g. a
     local Ollama serving Jev models), or to `https://api.typesafe.ai` when none was set.
+  - Any other HTTP provider, when you name its base-url property:
+    `spring.ai.inspector.proxy.<name>=<property>[,<property>...]`, e.g.
+    `spring.ai.inspector.proxy.groq=spring.ai.openai.base-url`. The proxy forwards to that property's value, and the
+    inspector recognizes the wire format by the request path (OpenAI-compatible, Anthropic, Ollama, embeddings).
+- Models that make no HTTP calls (e.g. jinfer running in the JVM) or providers that aren't routed are still shown:
+  their round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
+  model and token usage it reported (marked "no HTTP"), in the cards, the tokens panel and the sequence view.
+- The run header lists the configured chat models of any provider (`spring.ai.<provider>.chat[.options].model`, and `spring.ai.<provider>.responses.model` for OpenAI's Responses API).
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.
 - Tool executions are reported from Spring AI's tool-calling observations. The demos don't include Boot's
@@ -148,7 +182,7 @@ spring-ai-inspector-server/src/main/resources/static/
     ├── main.js          entry point: DOM listeners, live event stream, deep links (the only module touching the DOM on load)
     ├── state.js         UI state and preferences
     ├── model.js         turns events into runs, calls, round-trips, tool runs, links
-    ├── providers.js     wire-format adapters (Anthropic, OpenAI, Ollama, Mistral, DeepSeek, TypeSafe)
+    ├── providers.js     wire-format adapters (Anthropic, OpenAI Chat Completions and Responses, Ollama, Mistral, DeepSeek, TypeSafe)
     ├── util.js          escaping, formatting, JSON highlighting
     ├── io.js · replay.js  export/import, replay
     └── render/          cards, wire, messages, rag, memory, sequence, page
@@ -168,8 +202,8 @@ node --test spring-ai-inspector/spring-ai-inspector-server/src/test/js/*.test.mj
   fail (connection refused) until the inspector is back on the same port. Restarting the inspector is fine; stopping
   it for good means restarting the apps too (they then talk to the providers directly again).
 
-- Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic) and Ollama
-  (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
+- Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic), OpenAI's
+  Responses API (`/v1/responses`, also from OpenAI-compatible providers) and Ollama (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
 - Other endpoints that go through the proxy, such as embeddings, are captured but shown as raw JSON only.
 - A `ChatClient` built with `ChatClient.builder(chatModel)` instead of the injected builder gets no advisor
   events, but its wire traffic is still captured.

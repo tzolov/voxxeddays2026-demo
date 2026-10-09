@@ -1,16 +1,22 @@
 import { usageOf } from '../providers.js';
 import { renderItems } from './cards.js';
 import { renderSequence } from './sequence.js';
+import { renderMcpPanel } from './mcp.js';
+import { advisorOnlyCalls, usageOfModelCall } from './models.js';
 import { renderTokenPanel } from './tokens.js';
 import { replay } from '../replay.js';
 import { pref, state } from '../state.js';
 import { esc, fmtMs, fmtNum, fmtTime } from '../util.js';
 
 // ---------------------------------------------------------------- page rendering
+/** Tokens and round-trips of a run: HTTP ones, and model calls without HTTP (see models.js). */
 export function runTotals(run) {
 	let input = 0, output = 0;
-	for (const w of run.wireList) { const u = usageOf(w); if (u) { input += u.input || 0; output += u.output || 0; } }
-	return { input, output };
+	const noHttp = advisorOnlyCalls(run);
+	for (const u of [...run.wireList.map(usageOf), ...noHttp.map(usageOfModelCall)]) {
+		if (u) { input += u.input || 0; output += u.output || 0; }
+	}
+	return { input, output, trips: run.wireList.length + noHttp.length };
 }
 
 export function renderSidebar() {
@@ -19,7 +25,7 @@ export function renderSidebar() {
 		const t = runTotals(r);
 		return `<button class="run-item ${r.id === state.selected ? 'sel' : ''}" data-run="${esc(r.id)}">
 			<div class="name"><span class="status ${r.ended ? '' : 'running'}"></span>${esc(r.app)}</div>
-			<div class="meta">${fmtTime(r.started)} · ${r.calls.size} call${r.calls.size === 1 ? '' : 's'} · ${r.wireList.length} trip${r.wireList.length === 1 ? '' : 's'}${t.input ? ` · ${fmtNum(t.input + t.output)} tok` : ''}</div>
+			<div class="meta">${fmtTime(r.started)} · ${r.calls.size} call${r.calls.size === 1 ? '' : 's'} · ${t.trips} trip${t.trips === 1 ? '' : 's'}${t.input ? ` · ${fmtNum(t.input + t.output)} tok` : ''}</div>
 		</button>`;
 	}).join('') : '<div class="meta" style="padding:.25rem;color:var(--muted)">No runs yet.</div>';
 }
@@ -54,14 +60,47 @@ export function renderMain() {
 		<span class="stat">${run.ended ? 'finished' : '<span class="spinner"></span> running'}</span>
 		${run.model ? `<span class="stat">configured <b>${esc(run.model)}</b></span>` : ''}
 		<span class="stat"><b>${run.calls.size}</b> ChatClient calls</span>
-		<span class="stat"><b>${run.wireList.length}</b> model round-trips</span>
+		<span class="stat"><b>${t.trips}</b> model round-trips</span>
 		${run.tools.size ? `<span class="stat"><b>${run.tools.size}</b> tool runs</span>` : ''}
 		<span class="stat"><b>${fmtNum(t.input)}</b> in · <b>${fmtNum(t.output)}</b> out tokens</span>
 		${run.ended && run.started ? `<span class="stat">${fmtMs(run.ended - run.started)}</span>` : ''}
 	</div>${actions}</div>`;
-	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest))
+	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest, { searches: run.searches || [] }))
 		|| '<div class="notice info">Run started, no model calls yet.</div>';
-	main.innerHTML = head + renderTokenPanel(run) + body;
+	main.innerHTML = head + renderTokenPanel(run) + renderMcpPanel(run) + body;
+}
+
+/**
+ * Where the sticky parts stop: the pinned tokens panel right under the top bar (and, while
+ * replaying, the replay bar); the sequence lane heads under those and the pinned panel.
+ */
+export function updateStickyOffsets() {
+	const replayBar = document.getElementById('replay');
+	const header = document.querySelector('.topbar').offsetHeight; // e.g. taller with the Spring scheme's logo and line
+	document.documentElement.style.setProperty('--header-h', header + 'px');
+	const top = header + (replayBar.hidden ? 0 : replayBar.offsetHeight);
+	document.documentElement.style.setProperty('--pin-top', top + 'px');
+	const pinned = document.querySelector('.tokens.pinned');
+	document.documentElement.style.setProperty('--seq-top', top + (pinned ? pinned.offsetHeight : 0) + 'px');
+}
+
+// Recomputes the offsets whenever what they depend on changes size: the bars, and the pinned
+// tokens panel (folded, re-wrapped by the text size or the sidebar's width, ...).
+let resizeObserver = null;
+function watchStickyOffsets() {
+	updateStickyOffsets();
+	if (typeof ResizeObserver === 'undefined') return;
+	resizeObserver ||= new ResizeObserver(updateStickyOffsets);
+	resizeObserver.disconnect(); // the panel is a new element after each render
+	for (const el of [document.querySelector('.topbar'), document.getElementById('replay'), document.querySelector('.tokens.pinned')]) {
+		if (el) resizeObserver.observe(el);
+	}
+}
+
+/** Keeps the sticky lane heads aligned with the sequence diagram scrolled sideways under them. */
+export function syncSequenceHead(wrap) {
+	const head = wrap.parentElement?.querySelector('.seq-head');
+	if (head) head.scrollLeft = wrap.scrollLeft;
 }
 
 export let renderPending = false;
@@ -71,12 +110,15 @@ export function render() {
 	requestAnimationFrame(() => {
 		renderPending = false;
 		const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+		// The sequence's sideways scroll is kept across live updates of the same run, not into another run.
+		const before = document.querySelector('.seq-view');
+		const scroll = before && { run: before.dataset.run, left: before.querySelector('.seq-wrap').scrollLeft };
 		renderSidebar();
 		renderMain();
-		// The pinned tokens panel sticks right under the top bar and, while replaying, the replay bar.
-		const replayBar = document.getElementById('replay');
-		const top = document.querySelector('.topbar').offsetHeight + (replayBar.hidden ? 0 : replayBar.offsetHeight);
-		document.documentElement.style.setProperty('--pin-top', top + 'px');
+		const view = document.querySelector('.seq-view');
+		if (view && scroll && view.dataset.run === scroll.run) view.querySelector('.seq-wrap').scrollLeft = scroll.left;
+		if (view) syncSequenceHead(view.querySelector('.seq-wrap'));
+		watchStickyOffsets();
 		if (state.follow && nearBottom) window.scrollTo(0, document.body.scrollHeight);
 	});
 }

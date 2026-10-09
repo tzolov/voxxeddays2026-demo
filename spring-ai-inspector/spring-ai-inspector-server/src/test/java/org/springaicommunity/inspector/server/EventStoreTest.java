@@ -41,6 +41,12 @@ class EventStoreTest {
 		add("client-request", "r1", "callId", "c1");
 
 		assertThat(add("vector-search", "r1", "searchId", "s1")).containsEntry("clientCallId", "c1");
+		assertThat(add("vector-start", "r1", "opId", "o1", "op", "search")).containsEntry("clientCallId", "c1");
+		// Adds and embedding calls carry their call from the thread that made them: without one (e.g.
+		// ingesting in the background) they stay at run level, not under the open chat call.
+		assertThat(add("vector-add", "r1", "count", 3)).doesNotContainKey("clientCallId");
+		assertThat(add("vector-start", "r1", "opId", "o2", "op", "add")).doesNotContainKey("clientCallId");
+		assertThat(add("embedding-call", "r1", "embeddingId", "e1")).doesNotContainKey("clientCallId");
 	}
 
 	@Test
@@ -51,7 +57,9 @@ class EventStoreTest {
 
 		Map<String, Object> subAgent = add("client-request", "r1", "callId", "c2");
 
-		assertThat(subAgent).containsEntry("parentId", "c1").containsEntry("parentInferred", true);
+		assertThat(subAgent).containsEntry("parentId", "c1")
+			.containsEntry("parentToolId", "t1")
+			.containsEntry("parentInferred", true);
 	}
 
 	@Test

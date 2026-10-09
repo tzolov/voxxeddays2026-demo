@@ -1,10 +1,30 @@
-import { esc, fmtMs, fmtNum, isOpen, oneLine } from '../util.js';
+import { esc, fmtMs, isOpen, oneLine } from '../util.js';
 
 // ---------------------------------------------------------------- RAG
-export function renderIngest(ev) {
-	const sources = [...new Set((ev.sample || []).map((d) => d.metadata?.file_name || d.metadata?.source).filter(Boolean))];
-	return `<div class="notice info" style="margin-bottom:.6rem">⤓ Ingested <b>${fmtNum(ev.count)}</b> chunks into <b>${esc(ev.store)}</b>
-		${sources.length ? `from <span class="fn">${sources.map(esc).join(', ')}</span>` : ''} · ${fmtMs(ev.durationMs)}</div>`;
+/** A similarity score as shown everywhere: 0.869, or – when there is none. */
+export const scoreText = (score) => (score != null ? Number(score).toFixed(3) : '–');
+
+/** The page a document came from (e.g. a PDF reader's), if any. */
+export const pageOf = (doc) => doc.metadata?.page_number ?? doc.metadata?.page;
+
+const hitsText = (sr) => `${sr.results.length} hit${sr.results.length === 1 ? '' : 's'}`;
+const bestScore = (sr) => {
+	const scores = sr.results.map((r) => r.score).filter((s) => s != null);
+	return scores.length ? Math.max(...scores) : null; // no best when no hit has a score
+};
+
+/** A search's hits in words, e.g. "4 hits · best 0.869". */
+export function searchSummary(sr) {
+	const best = bestScore(sr);
+	return hitsText(sr) + (best != null ? ` · best ${scoreText(best)}` : '');
+}
+
+/** A search's outcome for a summary line: running, failed, or its hits and best score. */
+export function searchStatus(sr) {
+	if (sr.pending) return '<span class="spinner"></span><span class="right-meta">searching…</span>';
+	if (sr.error) return `<span class="pill err" title="${esc(sr.error)}">${esc(oneLine(sr.error, 60))}</span>`;
+	const best = bestScore(sr);
+	return `<span class="pill">${hitsText(sr)}</span>` + (best != null ? `<span class="pill">best ${scoreText(best)}</span>` : '');
 }
 
 export const RAG_CONTEXT_KEYS = new Set(['rag_document_context', 'qa_retrieved_documents']);
@@ -28,10 +48,10 @@ export function renderPipeline(rag, searches) {
 
 export function docPills(d) {
 	const m = d.metadata || {};
-	return [d.score != null && `<span class="pill">similarity <b>${Number(d.score).toFixed(3)}</b></span>`,
+	return [d.score != null && `<span class="pill">similarity <b>${scoreText(d.score)}</b></span>`,
 		m['jev.rerank.score'] != null && `<span class="pill">jev rerank <b>${Number(m['jev.rerank.score']).toFixed(2)}</b></span>`,
 		m['jev.classification'] && `<span class="pill ${m['jev.classification'] === 'INCLUDED' ? 'cool' : 'hot'}">jev ${esc(m['jev.classification'])}</span>`,
-		(m.page_number ?? m.page) != null && `<span class="pill">page ${esc(m.page_number ?? m.page)}</span>`].filter(Boolean).join('');
+		pageOf(d) != null && `<span class="pill">page ${esc(pageOf(d))}</span>`].filter(Boolean).join('');
 }
 
 export function renderDoc(d, cls = '') {
@@ -39,15 +59,13 @@ export function renderDoc(d, cls = '') {
 }
 
 export function renderSearch(sr, idx) {
-	const key = 'search:' + sr.searchId;
-	const top = sr.results.length ? Math.max(...sr.results.map((r) => r.score || 0)) : null;
+	const key = 'search:' + (sr.opId ?? sr.searchId); // stable from the search's start to its end
 	return `<details class="wire" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary><span class="chev">▸</span>
 		<span class="num">🔎</span><span class="fn">“${esc(oneLine(sr.query, 90))}”</span>
-		<span class="pill">${sr.results.length} hit${sr.results.length === 1 ? '' : 's'}</span>
-		${top != null ? `<span class="pill">best ${top.toFixed(3)}</span>` : ''}<span class="right-meta">${fmtMs(sr.durationMs)}</span></summary>
+		${searchStatus(sr)}${sr.pending ? '' : `<span class="right-meta">${fmtMs(sr.durationMs)}</span>`}</summary>
 		<div class="pane on">${sr.results.map((r) => `<div class="search-row"><div class="bar"><span style="width:${(Math.max(0, Math.min(1, r.score || 0)) * 100).toFixed(1)}%"></span></div>
-			<span class="val">${r.score != null ? Number(r.score).toFixed(3) : '–'}</span><span class="snip" title="${esc(r.text)}">${esc(oneLine(r.text, 140))}</span></div>`).join('')
-			|| '<div class="notice info">no results above the threshold</div>'}</div></details>`;
+			<span class="val">${scoreText(r.score)}</span><span class="snip" title="${esc(r.text)}">${esc(oneLine(r.text, 140))}</span></div>`).join('')
+			|| (sr.pending ? '' : '<div class="notice info">no results above the threshold</div>')}</div></details>`;
 }
 
 // What retrieval did for this call: configured stages, every vector search, and which

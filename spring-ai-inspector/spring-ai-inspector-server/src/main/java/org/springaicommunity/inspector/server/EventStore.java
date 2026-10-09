@@ -195,7 +195,11 @@ public class EventStore {
 		if (!(event.get("runId") instanceof String runId) || this.importing) {
 			return;
 		}
-		if (("vector-search".equals(type) || "tool-start".equals(type)) && event.get("clientCallId") == null) {
+		// Searches and tool runs belong to the open call even when made on another thread. Adds
+		// and embedding calls carry their call from the thread that made them: without one they
+		// stay at run level (e.g. ingesting in the background while a chat call is open).
+		boolean search = "vector-search".equals(type) || ("vector-start".equals(type) && "search".equals(event.get("op")));
+		if ((search || "tool-start".equals(type)) && event.get("clientCallId") == null) {
 			event.put("clientCallId", peek(this.openClientCalls, runId));
 		}
 		if ("client-request".equals(type) && event.get("parentId") == null) {
@@ -208,8 +212,9 @@ public class EventStore {
 	 * <ul>
 	 * <li>in the same run, from another thread, while a tool of that run is running (e.g. a
 	 * background sub-agent started by the {@code Task} tool): nest it under the call that
-	 * owns the tool. Without an open tool it is left top-level, so concurrent requests in a
-	 * server application are not nested under each other;</li>
+	 * owns the tool, and name the tool ({@code parentToolId}). Without an open tool it is
+	 * left top-level, so concurrent requests in a server application are not nested under
+	 * each other;</li>
 	 * <li>in another JVM (e.g. an A2A remote agent): link it to the tool call that is open
 	 * right now in another run, such as the caller's {@code Task} tool.</li>
 	 * </ul>
@@ -229,6 +234,7 @@ public class EventStore {
 		}
 		if (sameRun != null && sameRun.clientCallId() != null) {
 			event.put("parentId", sameRun.clientCallId());
+			event.put("parentToolId", sameRun.toolId());
 			event.put("parentInferred", true);
 			return;
 		}

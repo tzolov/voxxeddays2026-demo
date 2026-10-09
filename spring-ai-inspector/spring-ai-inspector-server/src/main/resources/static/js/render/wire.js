@@ -1,11 +1,11 @@
-import { adapterOf, normRequest, normResponse, providerLabel } from '../providers.js';
+import { adapterOf, inputCount, normRequest, normResponse, providerLabel } from '../providers.js';
 import { renderSystemMessage } from './messages.js';
 import { state } from '../state.js';
 import { wireModelKey } from './tokens.js';
 import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson } from '../util.js';
 
 // ---------------------------------------------------------------- wire rendering
-export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /end_turn|^stop$/.test(stop || '') ? 'stop-end_turn' : '';
+export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /end_turn|^stop$|^completed$/.test(stop || '') ? 'stop-end_turn' : '';
 
 export function renderBlock(b) {
 	switch (b.type) {
@@ -19,6 +19,7 @@ export function renderBlock(b) {
 			if (b.text) return `<div class="block"><div class="block-label">thinking</div><div class="text">${esc(b.text)}</div></div>`;
 			// Reasoning not returned: the block only carries what the model needs to resume it.
 			const [label, why] = b.redacted ? ['redacted (encrypted)', 'The reasoning was encrypted by the provider and is sent back as is.']
+				: b.hidden ? ['hidden', 'The reasoning is not returned, only a reference to it, which is sent back so the model can continue from it.']
 				: b.signed ? ['hidden (signature only)', 'The reasoning is not returned, only its signature, which is sent back so the model can continue from it.']
 				: ['empty', 'The model returned an empty thinking block.'];
 			return `<div class="block" title="${esc(why)}"><div class="block-label">thinking · ${label}</div></div>`;
@@ -86,9 +87,11 @@ export function renderHeaders(h) {
 }
 
 export function previousConversation(wire) {
-	// The closest earlier round-trip to the same provider, for the re-sent / new markers.
+	// The closest earlier round-trip to the same provider and protocol, for the re-sent / new markers.
+	const adapter = adapterOf(wire);
+	if (!adapter) return null;
 	for (let w = wire.prev; w; w = w.prev) {
-		if (w.req.provider === wire.req.provider && adapterOf(w)) return normRequest(w);
+		if (w.req.provider === wire.req.provider && adapterOf(w) === adapter) return normRequest(w);
 	}
 	return null;
 }
@@ -135,11 +138,29 @@ export function renderSystemOneCriteria(q) {
 	return `<div class="s1-crit">${Object.entries(c).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(criterionText(v))}`).join('<br>')}</div>`;
 }
 
+// The state can be long (e.g. every tool a tool search chooses from): folded to its first
+// lines by default, like system prompts.
+const STATE_PREVIEW_LINES = 6;
+const STATE_FOLD_CHARS = 1_500; // folded also when a few lines hold long strings
+const STATE_PREVIEW_LINE_CHARS = 160;
+
+function renderSystemOneState(wire, st) {
+	if (st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length === 1 && typeof st.text === 'string') {
+		return `<div class="msg user"><div class="role">state · text</div><div class="text">${esc(st.text)}</div></div>`;
+	}
+	const json = JSON.stringify(st ?? null, null, 2);
+	const lines = json.split('\n');
+	if (lines.length <= STATE_PREVIEW_LINES + 2 && json.length <= STATE_FOLD_CHARS) return `<pre class="json">${highlightJson(json)}</pre>`;
+	const preview = lines.slice(0, STATE_PREVIEW_LINES).map((l) => (l.length > STATE_PREVIEW_LINE_CHARS ? l.slice(0, STATE_PREVIEW_LINE_CHARS) + '…' : l));
+	const key = 's1-state:' + wire.id;
+	return `<details class="s1-state" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>
+		<span class="s1-state-label"><span class="chev">▸</span>state · ${fmtNum(lines.length)} lines · ${fmtNum(json.length)} chars</span>
+		<pre class="json s1-state-preview">${highlightJson(preview.join('\n'))}${lines.length > STATE_PREVIEW_LINES ? '\n  …' : ''}</pre></summary>
+		<pre class="json">${highlightJson(json)}</pre></details>`;
+}
+
 export function renderSystemOne(wire, nreq, nresp) {
-	const st = nreq.state;
-	const stateHtml = st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length === 1 && typeof st.text === 'string'
-		? `<div class="msg user"><div class="role">state · text</div><div class="text">${esc(st.text)}</div></div>`
-		: `<pre class="json">${highlightJson(st ?? null)}</pre>`;
+	const stateHtml = renderSystemOneState(wire, nreq.state);
 	let answersNote = '';
 	if (wire.resp && nresp && nresp.error) answersNote = `<div class="notice err">${esc(nresp.error)}</div>`;
 	const params = [nreq.params.model && `<span class="pill">model: <b>${esc(nreq.params.model)}</b></span>`,
@@ -152,6 +173,26 @@ export function renderSystemOne(wire, nreq, nresp) {
 		<td class="a">${wire.resp ? (nresp && nresp.answers ? renderSystemOneAnswer(nresp.answers[name]) : '–') : '<span class="spinner"></span>'}</td></tr>`).join('');
 	return `<div class="params">${params}</div>${stateHtml}${answersNote}
 		<table class="s1" style="margin-top:.6rem"><thead><tr><th>question</th><th>asked</th><th>answer</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------------------------------------------------------------- embeddings
+const NO_HTTP_EMBEDDING = 'Seen at the embedding model bean: no HTTP traffic was recorded for this call (a model running in the JVM).';
+const MAX_EMBEDDING_INPUTS = 20;
+
+/** e.g. "1 vector × 1,536" */
+export const embeddingResult = (nresp) => `${fmtNum(nresp.vectors)} vector${nresp.vectors === 1 ? '' : 's'}${nresp.dimensions ? ' × ' + fmtNum(nresp.dimensions) : ''}`;
+
+function renderEmbedding(wire, nreq, nresp) {
+	const params = [nreq.params.model && `<span class="pill">model: <b>${esc(nreq.params.model)}</b></span>`,
+		nreq.params.dimensions && `<span class="pill">dimensions: <b>${esc(nreq.params.dimensions)}</b></span>`,
+		nresp && !nresp.error && `<span class="pill">${embeddingResult(nresp)}</span>`,
+		nresp?.usage?.input != null && `<span class="pill">input: <b>${fmtNum(nresp.usage.input)}</b></span>`].filter(Boolean).join('');
+	const inputs = nreq.inputs.slice(0, MAX_EMBEDDING_INPUTS).map((text, i) => `<div class="msg user"><div class="role">input ${i + 1}</div>
+		<div class="text">${esc(typeof text === 'string' ? oneLine(text, 600) : JSON.stringify(text))}</div></div>`).join('');
+	const hidden = inputCount(nreq) - Math.min(nreq.inputs.length, MAX_EMBEDDING_INPUTS);
+	const more = hidden > 0 ? `<div class="notice info">… and ${hidden} more input${hidden === 1 ? '' : 's'}${wire.inProcess ? '' : ' (see Request JSON)'}</div>` : '';
+	const err = nresp?.error ? `<div class="notice err">${esc(nresp.error)}</div>` : '';
+	return `<div class="params">${params}</div>${err}<div class="msgs" style="margin-top:.5rem">${inputs}${more}</div>`;
 }
 
 // Compact answer highlights for the round-trip summary line.
@@ -173,10 +214,18 @@ export function renderWire(wire) {
 	const nresp = normResponse(wire);
 	const u = nresp && nresp.usage;
 
+	// An in-process call (e.g. an embedding model running in the JVM) has no HTTP request to show.
+	const where = wire.inProcess ? `<span class="path" title="${esc(NO_HTTP_EMBEDDING)}">EmbeddingModel call · no HTTP</span>`
+		: `<span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
-		<span class="pill">${esc(providerLabel(wire))}</span><span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
+		<span class="pill">${esc(providerLabel(wire))}</span>${where}`;
 	const systemOne = adapterOf(wire)?.kind === 'systemone';
-	if (nreq && systemOne) {
+	const embedding = adapterOf(wire)?.kind === 'embedding';
+	if (nreq && embedding) {
+		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
+		summary += `<span class="pill">embed ${inputCount(nreq)} input${inputCount(nreq) === 1 ? '' : 's'}</span>`;
+	}
+	else if (nreq && systemOne) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
 		const n = Object.keys(nreq.questions).length;
 		summary += `<span class="pill">${n} question${n === 1 ? '' : 's'}</span>`;
@@ -193,6 +242,7 @@ export function renderWire(wire) {
 	else {
 		const toolUses = nresp && nresp.blocks ? nresp.blocks.filter((b) => b.type === 'tool_use') : [];
 		if (systemOne) summary += systemOneHighlights(nresp);
+		else if (embedding && nresp && !nresp.error) summary += `<span class="pill stop-end_turn">${embeddingResult(nresp)}</span>`;
 		else if (toolUses.length) summary += toolUses.map((t) => `<span class="pill stop-tool_use">⚙ ${esc(t.name)}</span>`).join('');
 		else if (nresp && nresp.stop) summary += `<span class="pill ${stopClass(nresp.stop)}">${esc(nresp.stop)}</span>`;
 		if (u && (u.input != null || u.output != null)) summary += `<span class="right-meta">${fmtNum(u.input)} in · ${fmtNum(u.output)} out</span>`;
@@ -200,10 +250,14 @@ export function renderWire(wire) {
 	}
 
 	const tab = state.tabs.get(wire.id) || (nreq ? 'conv' : 'req');
-	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : 'Conversation'], ['req', 'Request JSON'], ['resp', 'Response'], ['hdr', 'Headers']].filter(Boolean);
+	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : 'Conversation'], ['req', wire.inProcess ? 'Request' : 'Request JSON'],
+		['resp', 'Response'], !wire.inProcess && ['hdr', 'Headers']].filter(Boolean);
 	let body = `<div class="tabs">${tabs.map(([id, label]) => `<button class="tab ${tab === id ? 'on' : ''}" data-wire="${esc(wire.id)}" data-tab="${id}">${label}</button>`).join('')}</div>`;
 	if (nreq && systemOne) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderSystemOne(wire, nreq, nresp)}</div>`;
+	}
+	else if (nreq && embedding) {
+		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderEmbedding(wire, nreq, nresp)}</div>`;
 	}
 	else if (nreq) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv"><div class="cols">
@@ -212,8 +266,8 @@ export function renderWire(wire) {
 	}
 	body += `<div class="pane ${tab === 'req' ? 'on' : ''}" data-pane="req"><div class="col-title">${esc(wire.req.url)}</div><pre class="json">${prettyMaybeJson(wire.req.body)}</pre></div>`;
 	const respBody = wire.resp ? (wire.resp.error ? esc(wire.resp.error) : prettyMaybeJson(wire.resp.body)) : '<span class="spinner"></span> waiting…';
-	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">HTTP ${esc(wire.resp?.status ?? '…')}</div><pre class="json">${respBody}</pre></div>`;
-	body += `<div class="pane ${tab === 'hdr' ? 'on' : ''}" data-pane="hdr"><div class="cols">
+	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">${wire.inProcess ? 'in-process' : `HTTP ${esc(wire.resp?.status ?? '…')}`}</div><pre class="json">${respBody}</pre></div>`;
+	if (!wire.inProcess) body += `<div class="pane ${tab === 'hdr' ? 'on' : ''}" data-pane="hdr"><div class="cols">
 		<div><div class="col-title">request headers</div>${renderHeaders(wire.req.headers)}</div>
 		<div><div class="col-title">response headers</div>${renderHeaders(wire.resp?.headers)}</div></div></div>`;
 
