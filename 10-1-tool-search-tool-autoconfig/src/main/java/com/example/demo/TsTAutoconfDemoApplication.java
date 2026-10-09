@@ -2,6 +2,7 @@ package com.example.demo;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.springaicommunity.typesafe.TypeSafeClient;
 import org.springaicommunity.typesafe.toolsearch.JevToolIndex;
@@ -77,13 +78,20 @@ public class TsTAutoconfDemoApplication {
 
 		@Tool(description = "Get the weather for a given location and at a given time")
 		public String weather(String location, @ToolParam(description = "YYYY-MM-DDTHH:mm:ss") String atTime) {
-			return "The current weather in " + location + " is sunny with a temperature of 25°C.";
+			// A different temperature on each run, so the clothing advice changes too.
+			int temperature = ThreadLocalRandom.current().nextInt(-2, 29);
+			String conditions = temperature < 5 ? "cold and overcast, with a chance of sleet"
+					: temperature < 12 ? "cool and windy, with light rain"
+							: temperature < 20 ? "mild and partly cloudy" : "sunny and warm";
+			return "The weather in " + location + " is " + conditions + ", " + temperature + "°C.";
 		}
 
 		@Tool(description = "Get the names of clothing shops in a location that are open at a given time")
 		public List<String> clothing(String location,
 				@ToolParam(description = "YYYY-MM-DDTHH:mm:ss") String openAtTime) {
-			return List.of("Foo", "Bar", "Baz");
+			return List.of("De Kledingkast, Dorpsstraat 12 (open 09:30-18:00) - casual and outdoor wear",
+					"Mode Landsmeer, Zuideinde 48 (open 10:00-17:30) - women's and men's fashion",
+					"Buitensport Waterland, Noordeinde 5 (open 09:00-18:00) - rain jackets and boots");
 		}
 
 		@Tool(description = "Provides the current date and time (as date-time string) for a given location")
