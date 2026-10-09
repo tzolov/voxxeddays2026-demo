@@ -3,8 +3,9 @@ import { mcpName, renderMcpMessages } from './mcp.js';
 import { isAdvisorOnly, renderModelCall, usageOfModelCall } from './models.js';
 import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
-import { RAG_CONTEXT_KEYS, renderIngest, renderRag } from './rag.js';
+import { RAG_CONTEXT_KEYS, pageOf, renderRag, scoreText, searchStatus } from './rag.js';
 import { wireModelKey } from './tokens.js';
+import { isEmbeddingWire, opKey, toolAt, vectorOps } from './vectorops.js';
 import { NOUL_HOT, renderWire } from './wire.js';
 import { state } from '../state.js';
 import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine, parseJson, prettyMaybeJson, recordedTs } from '../util.js';
@@ -14,13 +15,18 @@ import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine
 const mcpTitle = (mcp) => [mcp.connection && `MCP connection: ${mcp.connection}`,
 	mcp.server && `server: ${mcp.server}${mcp.serverVersion ? ' ' + mcp.serverVersion : ''}`, mcp.tool && `tool: ${mcp.tool}`].filter(Boolean).join('\n');
 
-export function renderTool(tool) {
+/**
+ * {@code nested}: what the tool did meanwhile, e.g. a vector store search (see renderItems);
+ * {@code running}: what of it is still running, shown on the (collapsed) card's summary line.
+ */
+export function renderTool(tool, nested = '', running = '') {
 	const key = 'tool:' + tool.id;
 	const st = tool.start; const end = tool.end;
 	const args = parseJson(st.arguments);
 	let summary = `<span class="chev">▸</span><span class="num">⚙</span><span class="fn">${esc(st.name)}</span>
 		${st.mcp ? `<span class="pill mcp" title="${esc(mcpTitle(st.mcp))}">MCP · ${esc(mcpName(st.mcp))}</span>`
 		: st.toolType ? `<span class="pill">${esc(st.toolType)}</span>` : ''}<span class="oneline">${esc(oneLine(st.arguments, 80))}</span><span class="arrow">→</span>`;
+	summary += running;
 	if (!end) summary += '<span class="spinner"></span><span class="right-meta">running…</span>';
 	else if (end.error) summary += `<span class="pill err">${esc(oneLine(end.error, 60))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;
 	else summary += `<span class="oneline">${esc(oneLine(end.result, 80))}</span><span class="right-meta">${fmtMs(end.durationMs)}</span>`;
@@ -35,19 +41,17 @@ export function renderTool(tool) {
 	if (mcp) summary += `<span class="pill mcp" title="MCP messages while the tool ran">${tool.mcp.length} MCP msgs</span>`;
 	const remote = (tool.remoteCalls || []).map((rc) => `<div class="remote-head">↘ handled by <b>${esc(rc.run.app)}</b> · linked by timing</div>${renderCall(rc, false)}`).join('');
 	if (remote) summary += `<span class="link-badge">↘ ${tool.remoteCalls.length} remote call${tool.remoteCalls.length === 1 ? '' : 's'}</span>`;
-	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, !!remote) ? 'open' : ''}><summary>${summary}</summary>${body}${mcp}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
+	const inner = nested ? `<div class="pane on" style="padding-top:0">${nested}</div>` : '';
+	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, !!remote) ? 'open' : ''}><summary>${summary}</summary>${body}${inner}${mcp}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
 }
 
 export function renderItem(it, latest) {
 	if (it.kind === 'wire') return renderWire(it.ref);
-	if (it.kind === 'tool') return renderTool(it.ref);
-	if (it.kind === 'ingest') return renderIngest(it.ref);
 	if (it.kind === 'model') return isAdvisorOnly(it.ref) ? renderModelCall(it.ref) : ''; // else its HTTP round-trip shows it
 	return renderCall(it.ref, it === latest);
 }
 
 export const isJevWire = (it) => it.kind === 'wire' && adapterOf(it.ref)?.kind === 'systemone';
-export const isEmbeddingWire = (it) => it.kind === 'wire' && adapterOf(it.ref)?.kind === 'embedding';
 
 /** Round-trips that fold into one group when 3+ run back to back: systemOne checks, embedding calls. */
 export const foldKind = (it) => (isJevWire(it) ? 'jev' : isEmbeddingWire(it) ? 'embed' : null);
@@ -102,7 +106,40 @@ function renderEmbeddingGroup(group) {
 // Renders items, folding runs of 3+ consecutive systemOne checks (e.g. per-document RAG
 // filtering) or embedding calls (e.g. ingesting documents) into one group each, so they
 // don't drown the model round-trips.
-export function renderItems(items, latest) {
+//
+// What a tool did while it ran is shown inside its card: the round-trips it made (e.g. a
+// systemOne check, an embedding), model calls without HTTP, and vector store adds and searches,
+// these with the embedding round-trips they made inside them (see vectorops.js). Like the
+// sequence view, by timing: with tools running in parallel, the first one open gets them.
+// ctx: the call's searches, its id (so a search's hits can open the Retrieval step) and the seq
+// it ended at (a tool whose end was never recorded runs until then).
+export function renderItems(all, latest, ctx = {}) {
+	const { ops, opOf } = vectorOps(all, ctx.searches || []);
+	const tools = all.filter((i) => i.kind === 'tool').map((i) => i.ref);
+	const seqOf = (it) => (it.kind === 'vop' ? it.ref.seq : it.kind === 'tool' ? it.ref.start.seq : it.ref.req?.seq ?? it.ref.seq ?? 0);
+	const inTool = new Map(tools.map((t) => [t, []])); const top = [];
+	const place = (it) => {
+		const tool = (it.kind === 'wire' || it.kind === 'model' || it.kind === 'vop') && toolAt(tools, seqOf(it), ctx.callEnd);
+		(tool ? inTool.get(tool) : top).push(it);
+	};
+	ops.forEach((op) => place({ kind: 'vop', ref: op }));
+	all.filter((i) => i.kind !== 'ingest' && !(i.kind === 'wire' && opOf(i.ref))).forEach(place);
+	const inOrder = (list) => list.map((it, i) => [it, i]).sort(([a, i], [b, j]) => seqOf(a) - seqOf(b) || i - j).map(([it]) => it);
+	const render = (it) => (it.kind === 'vop' ? renderVectorOp(it.ref, ctx)
+		: it.kind === 'tool' ? renderTool(it.ref, renderInOrder(inOrder(inTool.get(it.ref) || []), latest, render),
+			runningInside(inTool.get(it.ref) || []))
+		: renderItem(it, latest));
+	return renderInOrder(inOrder(top), latest, render);
+}
+
+/** What of a tool's own work is still running, e.g. "⤓ ingesting…", for its collapsed card's summary line. */
+function runningInside(entries) {
+	return entries.filter((e) => e.kind === 'vop' && e.ref.ev.pending)
+		.map((e) => `<span class="pill">${e.ref.search ? '🔎 searching…' : '⤓ ingesting…'}</span>`).join('');
+}
+
+/** Renders entries in order, folding runs of 3+ systemOne checks or embedding calls to one model. */
+function renderInOrder(items, latest, render) {
 	let html = '';
 	for (let i = 0; i < items.length;) {
 		const key = foldKey(items[i]);
@@ -115,11 +152,39 @@ export function renderItems(items, latest) {
 		}
 		else {
 			const end = Math.max(j, i + 1);
-			for (let k = i; k < end; k++) html += renderItem(items[k], latest);
+			for (let k = i; k < end; k++) html += render(items[k]);
 			i = end;
 		}
 	}
 	return html;
+}
+
+/** A vector store add or search, with the embedding round-trips it made and, for a search, its hits. */
+function renderVectorOp(op, ctx) {
+	const ev = op.ev;
+	const key = opKey(ev);
+	const status = op.search ? searchStatus(ev)
+		: ev.pending ? '<span class="spinner"></span><span class="right-meta">ingesting…</span>'
+		: ev.error ? `<span class="pill err" title="${esc(ev.error)}">${esc(oneLine(ev.error, 60))}</span>`
+		: `<span class="pill">${fmtNum(ev.count)} stored</span>`;
+	const summary = `<span class="chev">▸</span><span class="num">${op.search ? '🔎' : '⤓'}</span><span class="pill">${esc(ev.store)}</span>
+		${op.search ? `<span class="fn">“${esc(oneLine(ev.query, 80))}”</span>` : `<span class="fn">add ${fmtNum(ev.count)} chunk${ev.count === 1 ? '' : 's'}</span>`}
+		<span class="arrow">→</span>${status}${ev.pending ? '' : `<span class="right-meta">${fmtMs(ev.durationMs)}</span>`}`;
+	const nested = op.wires.length ? renderItems(op.wires.map((w) => ({ kind: 'wire', ref: w })), null) : '';
+	// The hits, one line: each opens the search in the Retrieval step, where the documents are.
+	const goto = ctx.callId && esc(JSON.stringify([`call:${ctx.callId}`, `search:${ev.opId ?? ev.searchId}`]));
+	const hits = op.search && ev.results.length ? `<div class="hits-line"><span class="col-title">hits</span>${ev.results.map((r) => {
+		const page = pageOf(r);
+		return `<span class="chip"${goto ? ` data-goto="${goto}"` : ''} title="${esc(oneLine(r.text, 300))}">${scoreText(r.score)}${page != null ? ' · page ' + esc(page) : ''}</span>`;
+	}).join('')}</div>` : '';
+	const sources = !op.search ? [...new Set((ev.sample || []).map((d) => d.metadata?.file_name || d.metadata?.source).filter(Boolean))] : [];
+	const from = sources.length ? `<div class="hits-line"><span class="col-title">from</span><span class="fn">${sources.map(esc).join(', ')}</span></div>` : '';
+	const error = ev.error ? `<div class="notice err">${esc(ev.error)}</div>` : '';
+	// Whether embeddings were recorded, whatever the search returned.
+	const empty = !nested && !ev.pending && !ev.error
+		? '<div class="notice info">No embedding round-trips recorded during it (e.g. embeddings reused, computed elsewhere or not routed).</div>' : '';
+	return `<details class="wire vector-op" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>${summary}</summary>
+		<div class="pane on">${error}${nested}${hits}${from}${empty}</div></details>`;
 }
 
 // ---------------------------------------------------------------- ChatClient call rendering
@@ -194,7 +259,7 @@ export function renderCall(call, isLatest) {
 	else s3 = '<div class="notice info"><span class="spinner"></span> advisors running…</div>';
 
 	// 4. wire round-trips, interleaved with nested ChatClient calls (sub-agents)
-	let s4 = renderItems(call.items, null);
+	let s4 = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp?.seq });
 	if (!s4) s4 = first ? '<div class="notice info">No wire traffic captured for this call (provider not routed through the inspector).</div>'
 		: '<div class="notice info">—</div>';
 
@@ -242,6 +307,9 @@ export function diffTools(appTools, modelTools) {
 export function wireHint(call) {
 	const tools = call.items.filter((i) => i.kind === 'tool').length;
 	const parts = [];
+	const searches = call.searches.length; const adds = call.items.filter((i) => i.kind === 'ingest').length;
+	if (searches) parts.push(`${searches} vector search${searches === 1 ? '' : 'es'}`);
+	if (adds) parts.push(`${adds} vector store add${adds === 1 ? '' : 's'}`);
 	if (call.wires.length) parts.push(`${call.wires.length} HTTP round-trip${call.wires.length === 1 ? '' : 's'}`);
 	const noHttp = call.modelCalls.filter(isAdvisorOnly).length;
 	if (noHttp) parts.push(`${noHttp} model call${noHttp === 1 ? '' : 's'} without HTTP`);

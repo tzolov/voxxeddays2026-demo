@@ -6,6 +6,9 @@ A live web UI that shows what each demo sends to the model, in three layers:
 2. **After the advisors**: the prompt after memory, RAG, guardrails and other advisors ran. Messages the advisors added or removed are highlighted.
 3. **On the wire**: every raw HTTP round-trip to the model, with request and response JSON, token usage and timing. Anthropic, OpenAI, Ollama, Mistral and DeepSeek traffic is rendered as one readable conversation. TypeSafe Jev
    `systemOne` calls (guardrails, judges, RAG filters) get a questions-and-answers view with the answer probabilities. Messages re-sent from an earlier round-trip are marked `re-sent`, new ones `new`. API keys are redacted.
+   What a tool did while it ran is shown inside its card: the round-trips it made (e.g. the systemOne check of a Jev tool
+   search) and its vector store adds and searches. These appear where they ran, with the embedding round-trips they
+   made inside them and, for a search, its hits, each opening the search in the Retrieval step.
 
 Nested `ChatClient` calls (for example sub-agents) are shown inside the call that triggered them. Tool executions
 (including MCP tools) appear between the round-trips that requested and consumed them, with arguments, result,

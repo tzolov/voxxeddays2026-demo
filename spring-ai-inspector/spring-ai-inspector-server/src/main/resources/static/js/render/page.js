@@ -65,7 +65,7 @@ export function renderMain() {
 		<span class="stat"><b>${fmtNum(t.input)}</b> in · <b>${fmtNum(t.output)}</b> out tokens</span>
 		${run.ended && run.started ? `<span class="stat">${fmtMs(run.ended - run.started)}</span>` : ''}
 	</div>${actions}</div>`;
-	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest))
+	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest, { searches: run.searches || [] }))
 		|| '<div class="notice info">Run started, no model calls yet.</div>';
 	main.innerHTML = head + renderTokenPanel(run) + renderMcpPanel(run) + body;
 }

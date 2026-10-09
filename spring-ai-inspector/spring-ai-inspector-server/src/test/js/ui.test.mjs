@@ -267,6 +267,14 @@ test('vector store adds and searches enclose the embedding calls they make, from
 	const call = topCalls(run)[0];
 
 	assert.deepEqual(call.items.filter((i) => i.kind === 'ingest').length, 1, 'the add belongs to the call that made it');
+	// In the cards: the add (with its embedding calls) before the tool, the search inside the tool's card.
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id });
+	const [add, tool, search] = ['add 3 chunks', 'data-key="tool:t1"', '“tool to get the time”'].map((x) => cards.indexOf(x));
+	assert.ok(add >= 0 && add < tool && tool < search, 'add, then the tool with its search inside');
+	assertArrowsOpenTheirCards(run);
+	const toolCard = renderTool(call.items.find((i) => i.kind === 'tool').ref, 'NESTED', '<span class="pill">🔎 searching…</span>');
+	assert.match(toolCard, /<div class="pane on" style="padding-top:0">NESTED<\/div>/);
+	assert.match(toolCard, /<summary>[\s\S]*🔎 searching…[\s\S]*<\/summary>/, 'what runs inside, on the collapsed card');
 	const { lanes, msgs } = buildSequence(run);
 	const name = (key) => lanes.find((l) => l.key === key).label;
 	const arrows = msgs.map((m) => `${name(m.from)} → ${name(m.to)}: ${m.label}`);
@@ -280,7 +288,7 @@ test('vector store adds and searches enclose the embedding calls they make, from
 		'Tools → Vector store: 🔎 tool to get the time',
 		'Vector store → text-embedding-ada-002: #5 · embed 1 input',
 		'text-embedding-ada-002 → Vector store: 1 vector · 5 ms',
-		'Vector store → Tools: 1 hits · best 0.80 · 30 ms']);
+		'Vector store → Tools: 1 hit · best 0.800 · 30 ms']);
 });
 
 test('a vector store add reported when it starts is drawn live: the diagram only grows', () => {
@@ -302,11 +310,13 @@ test('a vector store add reported when it starts is drawn live: the diagram only
 	const live = arrows();
 	assert.deepEqual(live, ['DemoApplication → Vector store: ingest 52 chunks',
 		'Vector store → text-embedding-ada-002: 4 embedding calls · 4 inputs', 'text-embedding-ada-002 → Vector store: 4 vectors · 35 ms']);
-	assert.match(renderItems(state.runs.get('live').items, null), /<span class="spinner"><\/span> Ingesting <b>52<\/b> chunks/);
+	// In the cards: one add card, still running, with the embedding calls inside it.
+	const liveCards = renderItems(state.runs.get('live').items, null);
+	assert.match(liveCards, /^<details class="wire vector-op" data-key="vop:a1" >[\s\S]*add 52 chunks[\s\S]*ingesting…[\s\S]*<b>4 embedding calls<\/b>/);
 
 	ev({ type: 'vector-add', ts: 1060, opId: 'a1', store: 'SimpleVectorStore', count: 52, durationMs: 60 });
 	assert.deepEqual(arrows(), [...live, 'Vector store → DemoApplication: 52 stored · 60 ms']);
-	assert.match(renderItems(state.runs.get('live').items, null), /Ingested <b>52<\/b> chunks/);
+	assert.match(renderItems(state.runs.get('live').items, null), /add 52 chunks<\/span>\s*<span class="arrow">→<\/span><span class="pill">52 stored<\/span><span class="right-meta">60 ms<\/span>/);
 });
 
 test('an embedding model running in the JVM is shown from its embedding calls, and not twice for a remote one', () => {
@@ -356,6 +366,129 @@ test('an embedding model running in the JVM is shown from its embedding calls, a
 	ev({ type: 'wire-response', ts: 2040, wireId: 'w1', status: 200, durationMs: 40, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
 	ev({ type: 'embedding-call', ts: 2045, embeddingId: 'dup', clientCallId: 'c1', provider: 'openai', inputs: 1, vectors: 1, durationMs: 50 });
 	assert.equal(runTotals(run).trips, 7);
+});
+
+test("On the wire shows vector store searches where they ran, with their embedding round-trips inside", () => {
+	// As 05-rag runs it: the question is embedded for the search, then the model answers.
+	let seq = 0; const ev = (e) => handle({ runId: 'rag', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: '05-rag · DemoApplication' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Was Florida hit by Milton?' }] });
+	ev({ type: 'vector-start', ts: 1001, opId: 's1', op: 'search', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'Was Florida hit by Milton?' });
+	ev({ type: 'wire-request', ts: 1010, wireId: 'q', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/embeddings', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'text-embedding-ada-002', input: ['Was Florida hit by Milton?'] }) });
+	ev({ type: 'wire-response', ts: 1180, wireId: 'q', status: 200, durationMs: 170, headers: {}, body: JSON.stringify({ data: [{ embedding: [0] }] }) });
+	ev({ type: 'vector-search', ts: 1182, opId: 's1', searchId: 'x', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'Was Florida hit by Milton?',
+		results: [{ score: 0.869, text: 'Six million Floridians…', metadata: { page_number: 5 } }, { score: 0.861, text: 'drop of 84 mb', metadata: { page_number: 3 } }], durationMs: 181 });
+	ev({ type: 'wire-request', ts: 1200, wireId: 'chat', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/chat/completions', url: 'u',
+		headers: {}, body: JSON.stringify({ model: 'gpt-5-mini', messages: [{ role: 'user', content: 'q' }] }) });
+	ev({ type: 'client-response', ts: 4200, callId: 'c1', generations: [{ role: 'assistant', text: 'Yes.' }] });
+	const call = topCalls(state.runs.get('rag'))[0];
+
+	const html = renderCall(call, true);
+	const wire = html.slice(html.indexOf('On the wire'));
+	assert.match(wire, /1 vector search · 2 HTTP round-trips/);
+	// The search first, holding its embedding round-trip, then the chat round-trip: the order they ran in.
+	assert.match(wire, /data-key="vop:s1"[\s\S]*“Was Florida hit by Milton\?”[\s\S]*2 hits[\s\S]*best 0\.869[\s\S]*181 ms[\s\S]*data-key="wire:q"[\s\S]*<\/details><div class="hits-line">[\s\S]*<\/details><details class="wire" data-key="wire:chat"/);
+	// Each hit opens the search in the Retrieval step.
+	assert.match(wire, /<span class="chip" data-goto="\[&quot;call:c1&quot;,&quot;search:s1&quot;\]" title="Six million Floridians…">0\.869 · page 5<\/span>/);
+	assert.equal((wire.match(/data-key="wire:q"/g) || []).length, 1, 'shown once, inside the search');
+});
+
+// Every arrow of the sequence opens its card: each key of its path is a card of the Cards view.
+function assertArrowsOpenTheirCards(run) {
+	const cards = topCalls(run).map((c) => renderCall(c, true)).join('');
+	for (const m of buildSequence(run).msgs) {
+		for (const key of m.path) assert.ok(cards.includes(`data-key="${key}"`), `${m.label}: no card ${key}`);
+	}
+}
+
+test("a tool's own round-trips are shown inside its card, e.g. the systemOne check of a Jev tool search", () => {
+	// As 10-1 runs with tool-index-type=jev: the tool search asks Jev which tool fits.
+	let seq = 0; const ev = (e) => handle({ runId: 'jev', seq: ++seq, ...e });
+	const wire = (id, ts, provider, path, body, resp) => {
+		ev({ type: 'wire-request', ts, wireId: id, clientCallId: 'c1', provider, method: 'POST', path, url: 'u', headers: {}, body: JSON.stringify(body) });
+		ev({ type: 'wire-response', ts: ts + 10, wireId: id, status: 200, durationMs: 10, headers: {}, body: JSON.stringify(resp) });
+	};
+	ev({ type: 'run-start', ts: 1000, app: '10-1 · App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [{ role: 'user', text: 'Plan my day' }] });
+	wire('chat1', 1010, 'openai', '/v1/chat/completions', { model: 'gpt-5-mini', messages: [] }, { choices: [{ message: { content: '' }, finish_reason: 'tool_calls' }] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	wire('jev', 1110, 'typesafe', '/v1/systemone', { model: 'jev-latest', state: {}, questions: { best_tool: { type: 'choice' } } },
+		{ answers: { best_tool: { type: 'choice', choice: 'clothing' } } });
+	ev({ type: 'tool-end', ts: 1200, toolId: 't1', result: '["clothing"]', durationMs: 100 });
+	wire('chat2', 1300, 'openai', '/v1/chat/completions', { model: 'gpt-5-mini', messages: [] }, { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] });
+	const call = topCalls(state.runs.get('jev'))[0];
+
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id });
+	const at = (x) => cards.indexOf(x);
+	assert.ok(at('data-key="wire:chat1"') < at('data-key="tool:t1"') && at('data-key="tool:t1"') < at('data-key="wire:jev"')
+		&& at('data-key="wire:jev"') < at('data-key="wire:chat2"'), 'chat, then the tool with its check inside, then chat');
+	const tool = cards.slice(at('data-key="tool:t1"'), at('data-key="wire:chat2"'));
+	assert.match(tool, /<div class="pane on" style="padding-top:0"><details class="wire" data-key="wire:jev"/);
+	assert.equal((cards.match(/data-key="wire:jev"/g) || []).length, 1, 'shown once, inside the tool');
+	// Clicking the systemOne arrow opens the tool's card, where the check is.
+	const arrow = buildSequence(state.runs.get('jev')).msgs.find((m) => m.label === 'systemOne · 1 questions');
+	assert.deepEqual(arrow.path, ['call:c1', 'tool:t1', 'wire:jev']);
+	assertArrowsOpenTheirCards(state.runs.get('jev'));
+});
+
+test('a tool whose end was never recorded holds only what ran before its call ended', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'lost', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'lostTool', arguments: '{}' }); // its end is lost
+	ev({ type: 'wire-request', ts: 1200, wireId: 'inside', clientCallId: 'c1', provider: 'openai', method: 'POST', path: '/v1/chat/completions', url: 'u', headers: {}, body: '{}' });
+	ev({ type: 'client-response', ts: 1300, callId: 'c1', generations: [] });
+	ev({ type: 'client-request', ts: 1400, callId: 'c2', messages: [] });
+	const call = topCalls(state.runs.get('lost'))[0];
+	// A later round-trip of the same call, recorded after the call ended (e.g. delivered late), stays outside.
+	handle({ type: 'wire-request', runId: 'lost', seq: ++seq, ts: 1500, wireId: 'after', clientCallId: 'c1', provider: 'openai', method: 'POST',
+		path: '/v1/chat/completions', url: 'u', headers: {}, body: '{}' });
+
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp.seq });
+	const tool = cards.indexOf('data-key="tool:t1"');
+	assert.ok(tool < cards.indexOf('data-key="wire:inside"'), 'inside the tool');
+	assert.match(cards, /<\/details><details class="wire" data-key="wire:after"/, 'after the tool, at top level');
+});
+
+test('a vector store card shows a failure in full, and no "nothing recorded" note while running or failed', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'ops', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'vector-start', ts: 1000, opId: 'a1', op: 'add', store: 'SimpleVectorStore', count: 2 });
+	const running = renderItems(state.runs.get('ops').items, null);
+	assert.match(running, /ingesting…/);
+	assert.doesNotMatch(running, /No embedding round-trips recorded/);
+	const error = 'HttpClientErrorException: 400 Bad Request: ' + 'x'.repeat(200);
+	ev({ type: 'vector-add', ts: 1050, opId: 'a1', store: 'SimpleVectorStore', count: 2, durationMs: 50, error });
+	const failed = renderItems(state.runs.get('ops').items, null);
+	assert.ok(failed.includes(`<div class="notice err">${error}</div>`), 'the whole error');
+	assert.doesNotMatch(failed, /No embedding round-trips recorded/);
+	// A search whose hits carry no scores claims no best score.
+	ev({ type: 'vector-start', ts: 1100, opId: 's1', op: 'search', store: 'SimpleVectorStore', query: 'q' });
+	ev({ type: 'vector-search', ts: 1110, opId: 's1', store: 'SimpleVectorStore', query: 'q', results: [{ text: 'a' }], durationMs: 10 });
+	const run = state.runs.get('ops');
+	const search = renderItems(run.items, null, { searches: run.searches });
+	assert.match(search, /1 hit<\/span>/);
+	assert.doesNotMatch(search, /best/);
+	// Searches outside any ChatClient call are drawn in the sequence too, also without a best score.
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '🔎 q'));
+	assert.ok(buildSequence(run).msgs.some((m) => m.label === '1 hit · 10 ms'));
+	// Whether embeddings were recorded is said whatever the search returned: here it has a hit but none.
+	assert.match(search, /data-key="vop:s1"[\s\S]*No embedding round-trips recorded/);
+});
+
+test('a collapsed tool card says what is still running inside it', () => {
+	let seq = 0; const ev = (e) => handle({ runId: 'busy', seq: ++seq, ...e });
+	ev({ type: 'run-start', ts: 1000, app: 'App' });
+	ev({ type: 'client-request', ts: 1000, callId: 'c1', messages: [] });
+	ev({ type: 'tool-start', ts: 1100, toolId: 't1', clientCallId: 'c1', name: 'toolSearchTool', arguments: '{}' });
+	ev({ type: 'vector-start', ts: 1110, opId: 's1', op: 'search', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'q' });
+	const call = topCalls(state.runs.get('busy'))[0];
+	const summary = (html) => html.slice(html.indexOf('data-key="tool:t1"'), html.indexOf('</summary>', html.indexOf('data-key="tool:t1"')));
+
+	assert.match(summary(renderItems(call.items, null, { searches: call.searches, callId: call.id })), /🔎 searching…/);
+	ev({ type: 'vector-search', ts: 1120, opId: 's1', clientCallId: 'c1', store: 'SimpleVectorStore', query: 'q', results: [], durationMs: 10 });
+	assert.doesNotMatch(summary(renderItems(call.items, null, { searches: call.searches, callId: call.id })), /searching…/);
 });
 
 test('tools that pass through the advisors stay visible after them', () => {

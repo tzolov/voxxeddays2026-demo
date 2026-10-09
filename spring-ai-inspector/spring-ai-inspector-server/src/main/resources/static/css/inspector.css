@@ -319,3 +319,9 @@ details.s1-state > summary::-webkit-details-marker { display: none; }
 details.s1-state .s1-state-label { display: flex; gap: .4rem; align-items: center; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .25rem; }
 details.s1-state[open] .s1-state-preview { display: none; }
 details.s1-state .s1-state-preview { opacity: .85; }
+
+/* ---------- vector store operations (On the wire) ---------- */
+.hits-line { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin-top: .45rem; font-size: .8rem; }
+.hits-line .col-title { margin: 0 .25rem 0 0; }
+.hits-line .chip[data-goto] { cursor: pointer; }
+.hits-line .chip[data-goto]:hover { border-color: var(--user); color: var(--user); }
