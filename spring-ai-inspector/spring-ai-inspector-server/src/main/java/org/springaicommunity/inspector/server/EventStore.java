@@ -212,8 +212,9 @@ public class EventStore {
 	 * <ul>
 	 * <li>in the same run, from another thread, while a tool of that run is running (e.g. a
 	 * background sub-agent started by the {@code Task} tool): nest it under the call that
-	 * owns the tool. Without an open tool it is left top-level, so concurrent requests in a
-	 * server application are not nested under each other;</li>
+	 * owns the tool, and name the tool ({@code parentToolId}). Without an open tool it is
+	 * left top-level, so concurrent requests in a server application are not nested under
+	 * each other;</li>
 	 * <li>in another JVM (e.g. an A2A remote agent): link it to the tool call that is open
 	 * right now in another run, such as the caller's {@code Task} tool.</li>
 	 * </ul>
@@ -233,6 +234,7 @@ public class EventStore {
 		}
 		if (sameRun != null && sameRun.clientCallId() != null) {
 			event.put("parentId", sameRun.clientCallId());
+			event.put("parentToolId", sameRun.toolId());
 			event.put("parentInferred", true);
 			return;
 		}

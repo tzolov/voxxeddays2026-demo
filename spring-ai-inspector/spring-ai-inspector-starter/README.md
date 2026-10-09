@@ -285,6 +285,9 @@ Each response event carries the generations with their finish reasons and thinki
   such as a sub-agent called from a tool, records the outer call as its `parentId`. The calls form a tree.
 - Tool runs, vector store operations and embedding calls read the top of that stack (`currentCallId()`). That is how
   they know which ChatClient call they belong to.
+- A running tool is kept on a thread-local stack too. A `ChatClient` call made by that tool, such as a sub-agent
+  started by a `Task` tool, records it as its `parentToolId`. The inspector shows the sub-agent inside the tool's
+  card. When the sub-agent runs on another thread, the inspector server infers the parent call and tool from timing.
 
 **Streaming.** `adviseStream` aggregates the `Flux` with `ChatClientMessageAggregator`. The completion and error
 callbacks run on Reactor threads, so they post with `sendAsync` and never block.

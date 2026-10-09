@@ -5,7 +5,7 @@ import { mcpName, mcpSummary } from './mcp.js';
 import { searchSummary } from './rag.js';
 import { isAdvisorOnly, modelCallOutcome, modelOf, providerOf, usageOfModelCall } from './models.js';
 import { memoryStoreKey } from './memory.js';
-import { isEmbeddingWire, opKey, toolAt as toolRunning, vectorOps } from './vectorops.js';
+import { isEmbeddingWire, opKey, toolAt as toolRunning, toolOfCall, vectorOps } from './vectorops.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine, recordedTs } from '../util.js';
 
@@ -139,7 +139,7 @@ export function buildSequence(run) {
 				// What the MCP server sends while the tool runs (logs, progress, sampling requests): notes on its lane.
 				// MCP messages are posted in the background, so their seq can come late (even after the tool's end):
 				// each note goes right after the last of the tool's start and its nested calls' steps recorded before it.
-				const anchors = [t.start, ...items.filter((i) => i.kind === 'call' && i.ref.req.seq > t.start.seq && (!t.end || i.ref.req.seq < t.end.seq))
+				const anchors = [t.start, ...items.filter((i) => i.kind === 'call' && toolOfCall(tools, i.ref, openEnd) === t)
 					.flatMap((i) => [i.ref.req, i.ref.resp].filter(Boolean))].sort((a, b) => recordedTs(a) - recordedTs(b) || a.seq - b.seq);
 				(t.mcp || []).filter((x) => x.direction === 'in' && x.kind !== 'response').forEach((m, i) => {
 					const anchor = anchors.filter((a) => recordedTs(a) <= recordedTs(m)).pop() ?? t.start;
@@ -154,9 +154,9 @@ export function buildSequence(run) {
 			}
 			else if (it.kind === 'call') {
 				const nested = it.ref;
-				// A nested call made while a tool runs is a sub-agent called by that tool;
-				// otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
-				const byTool = toolAt(nested.req.seq);
+				// A nested call made by a tool is a sub-agent called by that tool (its card is inside the
+				// tool's, as for remote agents); otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
+				const byTool = toolOfCall(tools, nested, openEnd);
 				// A call made while the MCP server's sampling request is open serves that request
 				// (by time: MCP messages are posted in the background, so their seq may come later).
 				const at = recordedTs(nested.req);
@@ -164,7 +164,7 @@ export function buildSequence(run) {
 					&& recordedTs(m) <= at);
 				const sampling = open.some((req) => !byTool.mcp.some((x) => x.kind === 'response' && x.direction === 'out' && x.id === req.id
 					&& recordedTs(x) < at));
-				if (byTool) walkCall(r, nested, toolLane(r, byTool), path, 0, byTool.start.name, null, sampling ? mcpName(byTool.start.mcp ?? {}) : null);
+				if (byTool) walkCall(r, nested, toolLane(r, byTool), [...path, 'tool:' + byTool.id], 0, byTool.start.name, null, sampling ? mcpName(byTool.start.mcp ?? {}) : null);
 				else walkCall(r, nested, adv, path, nest + 1, null, adv);
 			}
 		}

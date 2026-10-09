@@ -8,6 +8,11 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.observation.ToolCallingObservationContext;
 import org.springframework.ai.util.JsonHelper;
@@ -22,9 +27,19 @@ class InspectorToolObservationHandlerTest {
 
 	private final InspectorToolOrigins origins = new InspectorToolOrigins();
 
+	private final InspectorClient client = new InspectorClient("run-1",
+			body -> this.events.add(new JsonHelper().fromJsonToMap(body)));
+
 	InspectorToolObservationHandlerTest() {
-		InspectorClient client = new InspectorClient("run-1", body -> this.events.add(new JsonHelper().fromJsonToMap(body)));
-		this.registry.observationConfig().observationHandler(new InspectorToolObservationHandler(client, this.origins));
+		this.registry.observationConfig().observationHandler(new InspectorToolObservationHandler(this.client, this.origins));
+	}
+
+	private ChatClient chatClient(ChatModel model) {
+		return ChatClient.builder(model).defaultAdvisors(new InspectorAdvisor(this.client, InspectorAdvisor.Phase.CLIENT)).build();
+	}
+
+	private static ChatResponse answer(String text) {
+		return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
 	}
 
 	private Observation observe(String toolCallId) {
@@ -44,6 +59,30 @@ class InspectorToolObservationHandlerTest {
 		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
 		assertThat(this.events.get(0).get("name")).isEqualTo("airbnb_search");
 		assertThat(this.events.get(1).get("toolId")).isEqualTo(this.events.get(0).get("toolId"));
+	}
+
+	@Test
+	void aSubAgentCalledByAToolNamesTheToolRun() {
+		ChatClient subAgent = chatClient(prompt -> answer("sunny"));
+		// The agent's model runs a Task-like tool that calls the sub-agent, then calls it once more after the tool ended.
+		chatClient(prompt -> {
+			Observation tool = observe("call-1");
+			try {
+				subAgent.prompt("weather?").call().content();
+			}
+			finally {
+				tool.stop();
+			}
+			subAgent.prompt("again, not from the tool").call().content();
+			return answer("done");
+		}).prompt("plan my trip").call().content();
+
+		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		Object toolId = this.events.stream().filter(e -> "tool-start".equals(e.get("type"))).findFirst().orElseThrow().get("toolId");
+		assertThat(requests).hasSize(3);
+		assertThat(requests.get(0)).doesNotContainKey("parentToolId");
+		assertThat(requests.get(1)).containsEntry("parentId", requests.get(0).get("callId")).containsEntry("parentToolId", toolId);
+		assertThat(requests.get(2)).containsEntry("parentId", requests.get(0).get("callId")).doesNotContainKey("parentToolId");
 	}
 
 	@Test

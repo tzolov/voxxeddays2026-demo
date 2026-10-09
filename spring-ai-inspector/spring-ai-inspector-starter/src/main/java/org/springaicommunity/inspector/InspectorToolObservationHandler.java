@@ -13,7 +13,8 @@ import org.springframework.ai.tool.observation.ToolCallingObservationContext;
  * Reports every tool execution (including MCP tools) to the Spring AI Inspector, using the
  * observation Spring AI already emits around each tool call. Tool calls run on the
  * thread of the ChatClient call that requested them, so they are attributed to the
- * innermost open {@link InspectorAdvisor} call.
+ * innermost open {@link InspectorAdvisor} call. A ChatClient call the tool makes meanwhile
+ * (a sub-agent) names the tool run as its {@code parentToolId}.
  */
 public class InspectorToolObservationHandler implements ObservationHandler<ToolCallingObservationContext> {
 
@@ -30,6 +31,9 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 		final long start = System.currentTimeMillis();
 
 		int depth;
+
+		/** The open tool runs of the thread it started on (see InspectorAdvisor#toolStarted). */
+		java.util.Deque<InspectorAdvisor.ToolRun> thread;
 
 		Active(String toolId) {
 			this.toolId = toolId;
@@ -61,6 +65,8 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 			if (execution.depth++ > 0) {
 				return; // the same tool call, observed again
 			}
+			// Inside the lock, so onStop sees it even when the end is observed on another thread.
+			execution.thread = InspectorAdvisor.toolStarted(execution.toolId); // a sub-agent it calls names it
 		}
 		String toolId = execution.toolId;
 		String clientCallId = InspectorAdvisor.currentCallId();
@@ -101,6 +107,9 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 			}
 		}
 		this.active.remove(key);
+		if (execution.thread != null) {
+			execution.thread.removeIf(t -> t.toolId().equals(execution.toolId));
+		}
 		this.origins.stopped(execution.toolId);
 		long durationMs = System.currentTimeMillis() - execution.start;
 		this.client.send("tool-end", () -> {

@@ -77,6 +77,40 @@ class InspectorAdvisorTest {
 	}
 
 	@Test
+	void aCallNestedDeeperThanAToolIsNotAttributedToIt() {
+		// A tool of the outer call runs a sub-agent, whose own model calls one more ChatClient (not a tool).
+		ChatClient innermost = chatClient();
+		ChatClient subAgent = ChatClient.builder((ChatModel) prompt -> {
+			innermost.prompt("rewrite").call().content();
+			return new ChatResponse(List.of(new Generation(new AssistantMessage("sub"))));
+		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build();
+		ChatClient.builder((ChatModel) prompt -> {
+			var open = InspectorAdvisor.toolStarted("task-1");
+			try {
+				subAgent.prompt("sub-task").call().content();
+			}
+			finally {
+				open.removeIf(t -> t.toolId().equals("task-1"));
+			}
+			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
+		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
+
+		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		assertThat(requests).extracting(r -> r.get("parentToolId")).containsExactly(null, "task-1", null);
+		assertThat(requests.get(2).get("parentId")).isEqualTo(requests.get(1).get("callId"));
+	}
+
+	@Test
+	void aToolWhoseEndWasNeverObservedIsForgottenWhenItsCallEnds() {
+		ChatClient.builder((ChatModel) prompt -> {
+			InspectorAdvisor.toolStarted("lost"); // e.g. an Error thrown before the observation stopped
+			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
+		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
+
+		assertThat(InspectorAdvisor.parentToolId((String) this.events.get(0).get("callId"))).isNull();
+	}
+
+	@Test
 	void aFailureWhileDescribingTheCallNeverBreaksTheCall() {
 		Object hostile = new Object() {
 			@Override

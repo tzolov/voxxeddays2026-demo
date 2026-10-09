@@ -27,6 +27,20 @@ function load(name) {
 }
 
 const runOf = (runs, app) => runs.find((r) => r.app.startsWith(app));
+
+/** The card with this key in rendered HTML, with everything nested inside it. */
+function cardOf(html, key) {
+	const at = html.indexOf(`data-key="${key}"`);
+	if (at < 0) return null;
+	const re = /<details\b|<\/details>/g;
+	re.lastIndex = html.lastIndexOf('<details', at);
+	let depth = 0;
+	for (let m; (m = re.exec(html));) {
+		depth += m[0] === '</details>' ? -1 : 1;
+		if (!depth) return html.slice(html.lastIndexOf('<details', at), re.lastIndex);
+	}
+	return null;
+}
 const topCalls = (run) => run.items.filter((i) => i.kind === 'call').map((i) => i.ref);
 
 beforeEach(() => {
@@ -520,7 +534,9 @@ test('A2A: the remote agent call is linked under the caller\'s Task tool', () =>
 	const { groups, lanes } = buildSequence(caller);
 	assert.equal([...groups.values()].filter(Boolean).length, 1, 'one remote lane group');
 	assert.ok(lanes.some((l) => l.label === 'airbnb-agent'));
-	assert.match(renderCall(topCalls(caller)[0], true), /1 remote call/);
+	const card = cardOf(renderCall(topCalls(caller)[0], true), 'tool:' + task.id);
+	assert.match(card, /↘ 1 remote agent</);
+	assert.ok(card.includes(`data-key="call:${task.remoteCalls[0].id}"`), 'the remote call is inside the Task card');
 });
 
 test('systemOne served by a local Ollama: the lane shows the model and ollama', () => {
@@ -546,6 +562,44 @@ test('sub-agents: a call made by a tool gets its own lane', () => {
 	const [run] = load('subagent');
 
 	assert.ok(buildSequence(run).lanes.some((l) => l.label === 'Sub-agent' && l.sub === 'via Task'));
+});
+
+test('sub-agents: a call made by a tool is shown inside the tool, in the cards and the sequence', () => {
+	const [run] = load('subagent');
+	const [agent] = topCalls(run);
+	const task = [...run.tools.values()].find((t) => t.start.name === 'Task');
+	const sub = [...run.calls.values()].find((c) => c.parent === agent);
+
+	const html = renderCall(agent, true);
+	const card = cardOf(html, 'tool:' + task.id);
+	assert.ok(card.includes(`data-key="call:${sub.id}"`), 'the sub-agent call is inside the Task card');
+	assert.equal(html.split(`data-key="call:${sub.id}"`).length, 2, 'and nowhere else');
+	assert.match(card, /↘ 1 sub-agent</);
+	assert.match(card, /^<details[^>]* open>/, 'a tool that ran a sub-agent opens by default');
+	// Its arrow opens the Task card first, as for a remote agent.
+	const arrow = buildSequence(run).msgs.find((m) => m.path?.at(-1) === 'call:' + sub.id && !m.ret);
+	assert.deepEqual(arrow.path.slice(-2), ['tool:' + task.id, 'call:' + sub.id]);
+});
+
+test('sub-agents: the tool recorded as the parent wins over timing, e.g. two Task tools running in parallel', () => {
+	let seq = 0;
+	const at = (e) => handle({ runId: 'par', seq: ++seq, ts: 1000 + seq, ...e });
+	at({ type: 'run-start', app: 'parallel · App' });
+	at({ type: 'client-request', callId: 'main', messages: [{ role: 'user', text: 'plan a trip' }] });
+	at({ type: 'tool-start', toolId: 'weather', clientCallId: 'main', name: 'Task', arguments: '{}' });
+	at({ type: 'tool-start', toolId: 'airbnb', clientCallId: 'main', name: 'Task', arguments: '{}' });
+	at({ type: 'client-request', callId: 'sub', parentId: 'main', parentToolId: 'airbnb', messages: [{ role: 'user', text: 'find a flat' }] });
+	at({ type: 'client-response', callId: 'sub', durationMs: 1, generations: [{ role: 'assistant', text: 'a flat' }] });
+	at({ type: 'tool-end', toolId: 'airbnb', durationMs: 3, result: 'a flat' });
+	at({ type: 'tool-end', toolId: 'weather', durationMs: 5, result: 'sunny' });
+	at({ type: 'client-response', callId: 'main', durationMs: 9, generations: [{ role: 'assistant', text: 'done' }] });
+	const run = state.runs.get('par');
+
+	const html = renderCall(run.calls.get('main'), true);
+	assert.ok(cardOf(html, 'tool:airbnb').includes('data-key="call:sub"'));
+	assert.ok(!cardOf(html, 'tool:weather').includes('data-key="call:sub"'), 'not the first tool running at the time');
+	const arrow = buildSequence(run).msgs.find((m) => m.path?.at(-1) === 'call:sub' && !m.ret);
+	assert.ok(arrow.path.includes('tool:airbnb'));
 });
 
 // ---------------------------------------------------------------- provider adapters

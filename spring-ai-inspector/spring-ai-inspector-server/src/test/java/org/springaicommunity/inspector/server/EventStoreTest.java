@@ -57,7 +57,9 @@ class EventStoreTest {
 
 		Map<String, Object> subAgent = add("client-request", "r1", "callId", "c2");
 
-		assertThat(subAgent).containsEntry("parentId", "c1").containsEntry("parentInferred", true);
+		assertThat(subAgent).containsEntry("parentId", "c1")
+			.containsEntry("parentToolId", "t1")
+			.containsEntry("parentInferred", true);
 	}
 
 	@Test

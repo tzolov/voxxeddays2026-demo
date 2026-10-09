@@ -5,7 +5,7 @@ import { memoryHint, renderMemory } from './memory.js';
 import { diffMessages, renderAnswerMessage, renderSpringMessage } from './messages.js';
 import { RAG_CONTEXT_KEYS, pageOf, renderRag, scoreText, searchStatus } from './rag.js';
 import { wireModelKey } from './tokens.js';
-import { isEmbeddingWire, opKey, toolAt, vectorOps } from './vectorops.js';
+import { isEmbeddingWire, opKey, toolAt, toolOfCall, vectorOps } from './vectorops.js';
 import { NOUL_HOT, renderWire } from './wire.js';
 import { state } from '../state.js';
 import { MAX_ORDER, esc, fmtMs, fmtNum, fmtOrder, highlightJson, isOpen, oneLine, parseJson, prettyMaybeJson, recordedTs } from '../util.js';
@@ -16,10 +16,12 @@ const mcpTitle = (mcp) => [mcp.connection && `MCP connection: ${mcp.connection}`
 	mcp.server && `server: ${mcp.server}${mcp.serverVersion ? ' ' + mcp.serverVersion : ''}`, mcp.tool && `tool: ${mcp.tool}`].filter(Boolean).join('\n');
 
 /**
- * {@code nested}: what the tool did meanwhile, e.g. a vector store search (see renderItems);
- * {@code running}: what of it is still running, shown on the (collapsed) card's summary line.
+ * {@code nested}: what the tool did meanwhile, e.g. a vector store search or a sub-agent's
+ * ChatClient call (see renderItems); {@code running}: what of it is still running, shown on the
+ * (collapsed) card's summary line; {@code subAgents}: how many of the nested entries are sub-agent
+ * calls. Sub-agents in another app (remote agents, linked by the server) nest the same way.
  */
-export function renderTool(tool, nested = '', running = '') {
+export function renderTool(tool, nested = '', running = '', subAgents = 0) {
 	const key = 'tool:' + tool.id;
 	const st = tool.start; const end = tool.end;
 	const args = parseJson(st.arguments);
@@ -40,9 +42,12 @@ export function renderTool(tool, nested = '', running = '') {
 	const mcp = tool.mcp?.length ? `<div class="pane on" style="padding-top:0"><div class="col-title">MCP messages · ${esc(st.mcp?.connection ?? '')}</div>${renderMcpMessages(tool.mcp)}</div>` : '';
 	if (mcp) summary += `<span class="pill mcp" title="MCP messages while the tool ran">${tool.mcp.length} MCP msgs</span>`;
 	const remote = (tool.remoteCalls || []).map((rc) => `<div class="remote-head">↘ handled by <b>${esc(rc.run.app)}</b> · linked by timing</div>${renderCall(rc, false)}`).join('');
-	if (remote) summary += `<span class="link-badge">↘ ${tool.remoteCalls.length} remote call${tool.remoteCalls.length === 1 ? '' : 's'}</span>`;
+	const remotes = tool.remoteCalls?.length || 0;
+	const agents = [subAgents && `${subAgents} sub-agent${subAgents === 1 ? '' : 's'}`, remotes && `${remotes} remote agent${remotes === 1 ? '' : 's'}`].filter(Boolean);
+	if (agents.length) summary += `<span class="link-badge" title="ChatClient calls this tool made, shown inside it">↘ ${agents.join(' · ')}</span>`;
 	const inner = nested ? `<div class="pane on" style="padding-top:0">${nested}</div>` : '';
-	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, !!remote) ? 'open' : ''}><summary>${summary}</summary>${body}${inner}${mcp}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
+	// A tool that ran sub-agents opens by default: their calls are what it did.
+	return `<details class="wire tool-exec" data-key="${esc(key)}" ${isOpen(key, agents.length > 0) ? 'open' : ''}><summary>${summary}</summary>${body}${inner}${mcp}${remote ? `<div class="pane on" style="padding-top:0">${remote}</div>` : ''}</details>`;
 }
 
 export function renderItem(it, latest) {
@@ -119,7 +124,8 @@ export function renderItems(all, latest, ctx = {}) {
 	const seqOf = (it) => (it.kind === 'vop' ? it.ref.seq : it.kind === 'tool' ? it.ref.start.seq : it.ref.req?.seq ?? it.ref.seq ?? 0);
 	const inTool = new Map(tools.map((t) => [t, []])); const top = [];
 	const place = (it) => {
-		const tool = (it.kind === 'wire' || it.kind === 'model' || it.kind === 'vop') && toolAt(tools, seqOf(it), ctx.callEnd);
+		const tool = it.kind === 'call' ? toolOfCall(tools, it.ref, ctx.callEnd) // a sub-agent, inside its tool
+			: (it.kind === 'wire' || it.kind === 'model' || it.kind === 'vop') && toolAt(tools, seqOf(it), ctx.callEnd);
 		(tool ? inTool.get(tool) : top).push(it);
 	};
 	ops.forEach((op) => place({ kind: 'vop', ref: op }));
@@ -127,7 +133,7 @@ export function renderItems(all, latest, ctx = {}) {
 	const inOrder = (list) => list.map((it, i) => [it, i]).sort(([a, i], [b, j]) => seqOf(a) - seqOf(b) || i - j).map(([it]) => it);
 	const render = (it) => (it.kind === 'vop' ? renderVectorOp(it.ref, ctx)
 		: it.kind === 'tool' ? renderTool(it.ref, renderInOrder(inOrder(inTool.get(it.ref) || []), latest, render),
-			runningInside(inTool.get(it.ref) || []))
+			runningInside(inTool.get(it.ref) || []), (inTool.get(it.ref) || []).filter((e) => e.kind === 'call').length)
 		: renderItem(it, latest));
 	return renderInOrder(inOrder(top), latest, render);
 }
@@ -258,7 +264,7 @@ export function renderCall(call, isLatest) {
 	}
 	else s3 = '<div class="notice info"><span class="spinner"></span> advisors running…</div>';
 
-	// 4. wire round-trips, interleaved with nested ChatClient calls (sub-agents)
+	// 4. wire round-trips and tool runs, with what each tool did inside it (sub-agents, searches, ...)
 	let s4 = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp?.seq });
 	if (!s4) s4 = first ? '<div class="notice info">No wire traffic captured for this call (provider not routed through the inspector).</div>'
 		: '<div class="notice info">—</div>';
