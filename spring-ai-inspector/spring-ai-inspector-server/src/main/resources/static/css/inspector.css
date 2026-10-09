@@ -274,13 +274,21 @@ details.fold[open] > summary::before { content: "▾ "; }
 	.main { padding: 1rem; }
 }
 
+/* ---------- run bar: view and replay controls beside the tokens panel ---------- */
+.run-bar { display: flow-root; margin: -.25rem 0 1rem; }
+.run-bar > .run-actions { float: right; margin: 0 0 .35rem 1rem; }
+.run-bar .tokens { margin-top: 0; }
+.run-bar .tokens > summary { line-height: 2rem; } /* level with the controls beside it */
+.run-bar .tok-grid { clear: right; }
+.run-bar.pinned { position: sticky; top: var(--pin-top, 3rem); z-index: 8; background: var(--bg); margin: -.25rem -1.5rem 1rem;
+	padding: .5rem 1.5rem; border-bottom: 1px solid var(--line); }
+/* Only the rows scroll in a tall pinned bar: the controls and the tokens line stay in view. */
+.run-bar.pinned .tok-grid { max-height: calc(45vh - 3rem); overflow: auto; }
+
 /* ---------- tokens by model ---------- */
-.tokens { margin: -.25rem 0 1rem; }
 .tokens .pin { border: none; background: none; cursor: pointer; padding: 0 .35rem; font-size: .75rem; opacity: .35; filter: grayscale(1); }
 .tokens .pin:hover { opacity: .8; }
-.tokens.pinned .pin { opacity: 1; filter: none; }
-.tokens.pinned { position: sticky; top: var(--pin-top, 3rem); z-index: 8; background: var(--bg); margin: -.25rem -1.5rem 1rem;
-	padding: .5rem 1.5rem; border-bottom: 1px solid var(--line); max-height: 45vh; overflow: auto; }
+.tokens .pin[aria-pressed="true"] { opacity: 1; filter: none; }
 .tok-grid { display: flex; flex-direction: column; gap: .15rem; margin-top: .4rem; }
 .tok-row { display: grid; grid-template-columns: minmax(13rem, 1.3fr) minmax(8rem, 2fr) 5.5rem 5.5rem minmax(0, 1.3fr) 3rem;
 	gap: .75rem; align-items: center; width: 100%; text-align: left; font: inherit; font-size: .85rem; color: inherit;
@@ -303,7 +311,7 @@ details.fold[open] > summary::before { content: "▾ "; }
 @media (max-width: 900px) {
 	.tok-row { grid-template-columns: minmax(0, 1fr) 4.5rem 4.5rem; }
 	.tok-row > :nth-child(2), .tok-row > :nth-child(5), .tok-row > :nth-child(6) { display: none; }
-	.tokens.pinned { margin-inline: -1rem; padding-inline: 1rem; }
+	.run-bar.pinned { margin-inline: -1rem; padding-inline: 1rem; }
 }
 
 /* ---------- MCP messages ---------- */

@@ -91,9 +91,9 @@ export function renderTokenPanel(run) {
 			<span class="tok-num">${r.reported ? fmtNum(r.input) : '–'}</span><span class="tok-num">${r.reported ? fmtNum(r.output) : '–'}</span>
 			<span class="tok-extra">${esc(extras)}</span><span class="tok-num">${r.calls}</span></button>`;
 	}).join('');
-	// Pinned, the panel stays in view while the cards or the sequence scroll under it.
+	// Pinned, the run bar holding the panel stays in view while the cards or the sequence scroll under it (see page.js).
 	const pinned = pref('pinTokens', 'true') === 'true';
-	return `<details class="fold tokens${pinned ? ' pinned' : ''}" data-key="${esc(key)}" ${isOpen(key, true) ? 'open' : ''}>
+	return `<details class="fold tokens" data-key="${esc(key)}" ${isOpen(key, true) ? 'open' : ''}>
 		<summary>Tokens by model · <b>${fmtNum(total.input)}</b> in · <b>${fmtNum(total.output)}</b> out${hasRemote ? ' · incl. remote agents' : ''}
 			<button class="pin" data-action="pin-tokens" aria-pressed="${pinned}" title="${pinned ? 'Unpin: scroll with the page' : 'Pin: keep in view while scrolling'}">📌</button></summary>
 		<div class="tok-grid">

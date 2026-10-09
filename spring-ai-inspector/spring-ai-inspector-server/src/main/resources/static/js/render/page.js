@@ -64,15 +64,19 @@ export function renderMain() {
 		${run.tools.size ? `<span class="stat"><b>${run.tools.size}</b> tool runs</span>` : ''}
 		<span class="stat"><b>${fmtNum(t.input)}</b> in · <b>${fmtNum(t.output)}</b> out tokens</span>
 		${run.ended && run.started ? `<span class="stat">${fmtMs(run.ended - run.started)}</span>` : ''}
-	</div>${actions}</div>`;
+	</div></div>`;
 	const body = (view === 'sequence' && run.items.length ? renderSequence(run, scaled) : renderItems(run.items, latest, { searches: run.searches || [] }))
 		|| '<div class="notice info">Run started, no model calls yet.</div>';
-	main.innerHTML = head + renderTokenPanel(run) + renderMcpPanel(run) + body;
+	// The run bar: the view and replay controls beside the tokens panel, pinned together under the top bar.
+	const tokens = renderTokenPanel(run);
+	const pinned = pref('pinTokens', 'true') === 'true';
+	const bar = actions || tokens ? `<div class="run-bar${pinned ? ' pinned' : ''}">${actions}${tokens}</div>` : '';
+	main.innerHTML = head + bar + renderMcpPanel(run) + body;
 }
 
 /**
- * Where the sticky parts stop: the pinned tokens panel right under the top bar (and, while
- * replaying, the replay bar); the sequence lane heads under those and the pinned panel.
+ * Where the sticky parts stop: the pinned run bar right under the top bar (and, while
+ * replaying, the replay bar); the sequence lane heads under those and the pinned bar.
  */
 export function updateStickyOffsets() {
 	const replayBar = document.getElementById('replay');
@@ -80,19 +84,19 @@ export function updateStickyOffsets() {
 	document.documentElement.style.setProperty('--header-h', header + 'px');
 	const top = header + (replayBar.hidden ? 0 : replayBar.offsetHeight);
 	document.documentElement.style.setProperty('--pin-top', top + 'px');
-	const pinned = document.querySelector('.tokens.pinned');
+	const pinned = document.querySelector('.run-bar.pinned');
 	document.documentElement.style.setProperty('--seq-top', top + (pinned ? pinned.offsetHeight : 0) + 'px');
 }
 
 // Recomputes the offsets whenever what they depend on changes size: the bars, and the pinned
-// tokens panel (folded, re-wrapped by the text size or the sidebar's width, ...).
+// run bar (tokens folded, re-wrapped by the text size or the sidebar's width, ...).
 let resizeObserver = null;
 function watchStickyOffsets() {
 	updateStickyOffsets();
 	if (typeof ResizeObserver === 'undefined') return;
 	resizeObserver ||= new ResizeObserver(updateStickyOffsets);
 	resizeObserver.disconnect(); // the panel is a new element after each render
-	for (const el of [document.querySelector('.topbar'), document.getElementById('replay'), document.querySelector('.tokens.pinned')]) {
+	for (const el of [document.querySelector('.topbar'), document.getElementById('replay'), document.querySelector('.run-bar.pinned')]) {
 		if (el) resizeObserver.observe(el);
 	}
 }
