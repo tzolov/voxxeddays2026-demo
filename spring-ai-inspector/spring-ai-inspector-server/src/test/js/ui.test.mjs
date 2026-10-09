@@ -16,7 +16,7 @@ import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
-import { noulLeaning, renderBlock, renderWire } from '../../main/resources/static/js/render/wire.js';
+import { noulLeaning, renderBlock, renderNormRequest, renderWire } from '../../main/resources/static/js/render/wire.js';
 import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url)));
@@ -816,6 +816,52 @@ test('answers fold to a one-line preview and remember being opened', () => {
 	assert.match(thinking, /thinking · hidden \(signature only\)/);
 	assert.doesNotMatch(thinking, /msg assistant/);
 	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', toolCalls: [{ name: 'weather', arguments: '{}' }] }, 'k'), /<details/);
+});
+
+test('re-sent messages fold to one line, new ones stay open', () => {
+	const msg = (role, blocks) => ({ role, raw: { role, blocks }, blocks });
+	const user = msg('user', [{ type: 'text', text: 'Help me buy\nclothes.' }]);
+	const call = msg('assistant', [{ type: 'thinking', redacted: true }, { type: 'tool_use', id: 'c1', name: 'toolSearchTool', input: { query: 'shops' } }]);
+	const result = msg('tool', [{ type: 'tool_result', id: 'c1', name: 'toolSearchTool', content: '[]' }]);
+	const next = msg('assistant', [{ type: 'tool_use', id: 'c2', name: 'weather', input: {} }]);
+	const req = (messages) => ({ params: {}, tools: [], messages });
+
+	const render = () => renderNormRequest(req([user, call, result, next]), req([user, call, result]), 'w1');
+	const closed = render();
+	assert.match(closed, /<details class="resent" data-key="resent:w1" data-lazy >/);
+	assert.match(closed, /3 earlier messages\s*<span class="resent-roles">· 1 user · 1 assistant · 1 tool</);
+	// Closed, the fold renders none of its messages.
+	assert.doesNotMatch(closed, /Help me buy|toolSearchTool/);
+	// The new message is outside the fold, in full.
+	assert.match(closed, /<\/details><div class="msg assistant fresh"><div class="role">assistant<span class="tag fresh">new<\/span>/);
+
+	state.open.set('resent:w1', true);
+	const html = render();
+	assert.match(html, /data-key="resent:w1" data-lazy open>/);
+	assert.match(html, /data-key="resent-msg:0:\w+" data-lazy ><summary class="role">.*?sys-preview">Help me buy clothes\.<\/span><span class="sys-size">20 chars</s);
+	assert.match(html, /sys-preview">\[thinking\] · toolSearchTool\(\{&quot;query&quot;:&quot;shops&quot;\}\)<\/span><span class="sys-size">\d+ chars · 2 blocks</);
+	assert.match(html, /sys-preview">toolSearchTool → \[\]</);
+	// Closed messages are not rendered; an opened one is, and stays open in the next round-trip.
+	assert.doesNotMatch(html, /tool call · c1/);
+	const key = html.match(/data-key="(resent-msg:1:\w+)"/)[1];
+	state.open.set(key, true);
+	assert.match(render(), /tool call · c1/);
+	state.open.set('resent:w2', true);
+	assert.match(renderNormRequest(req([user, call, result, next, result]), req([user, call, result, next]), 'w2'), new RegExp(`data-key="${key}" data-lazy open>`));
+
+	// Long previews are cut to one short line.
+	const big = msg('tool', [{ type: 'tool_result', id: 'c1', name: 'search', content: 'x'.repeat(50000) }]);
+	state.open.set('resent:w3', true);
+	const preview = renderNormRequest(req([user, big, next]), req([user, big]), 'w3').match(/sys-preview">(search → x+…)<\/span><span class="sys-size">50,009 chars</);
+	assert.ok(preview && preview[1].length < 210);
+
+	// Only an unchanged run of leading messages is re-sent: a changed earlier message is new, in full.
+	const summary = msg('assistant', [{ type: 'text', text: 'Summary of earlier turns.' }]);
+	const changed = renderNormRequest(req([user, summary, next]), req([user, call, result]), 'w4');
+	assert.match(changed, /1 earlier message\s*<span class="resent-roles">· 1 user</);
+	assert.match(changed, /<div class="msg assistant fresh"><div class="role">assistant<span class="tag fresh">new<\/span><\/div><div class="text">Summary of earlier turns\.</);
+	// A first request has nothing re-sent.
+	assert.doesNotMatch(renderNormRequest(req([user]), null, 'w0'), /resent|tag fresh/);
 });
 
 test('a long systemOne state is folded to its first lines', () => {

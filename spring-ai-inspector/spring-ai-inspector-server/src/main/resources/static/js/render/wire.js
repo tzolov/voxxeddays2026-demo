@@ -1,5 +1,5 @@
 import { adapterOf, inputCount, normRequest, normResponse, providerLabel } from '../providers.js';
-import { renderSystemMessage } from './messages.js';
+import { hash, renderFoldedMessage, renderSystemMessage } from './messages.js';
 import { state } from '../state.js';
 import { wireModelKey } from './tokens.js';
 import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson } from '../util.js';
@@ -45,7 +45,42 @@ export const paramPills = (params) => Object.entries(params).map(([k, v]) => {
 	return `<span class="pill" title="${esc(text)}">${esc(k)}: <b>${esc(oneLine(text, 60))}</b></span>`;
 }).join('');
 
-export function renderNormRequest(req, prevReq) {
+// A message's blocks as plain text, for a folded message's one-line preview and size.
+function blocksText(blocks) {
+	return blocks.map((b) => {
+		switch (b.type) {
+			case 'text': return b.text;
+			case 'tool_use': return `${b.name}(${JSON.stringify(b.input ?? {})})`;
+			case 'tool_result': return `${b.name ? b.name + ' ' : ''}→ ${typeof b.content === 'string' ? b.content : JSON.stringify(b.content)}`;
+			case 'thinking': return b.text ? `thinking: ${b.text}` : '[thinking]';
+			default: return `[${b.label}]`;
+		}
+	}).join(' · ');
+}
+
+// A re-sent message folded to one line. Keyed by position and content, which stay the same in
+// every later round-trip of the conversation, so an opened message stays open in the next ones.
+function renderResentMessage(m, i) {
+	if (m.role === 'system') return renderWireMessage(m.role, m.blocks);
+	const text = blocksText(m.blocks);
+	const size = `${fmtNum(text.length)} chars${m.blocks.length > 1 ? ` · ${m.blocks.length} blocks` : ''}`;
+	return renderFoldedMessage(esc(m.role), '', '', oneLine(text, 200), () => m.blocks.map(renderBlock).join(''),
+		`resent-msg:${i}:${hash(JSON.stringify(m.raw))}`, false, size);
+}
+
+// The messages re-sent from the previous round-trip, folded to one line: in a long conversation
+// they are almost all of the request, and the new ones are what changed. Rendered only when open.
+function renderResentGroup(messages, key) {
+	const counts = {};
+	for (const m of messages) counts[m.role] = (counts[m.role] || 0) + 1;
+	const open = isOpen(key, false);
+	return `<details class="resent" data-key="${esc(key)}" data-lazy ${open ? 'open' : ''}><summary><span class="chev">▸</span>
+		<span class="tag muted">re-sent</span> ${messages.length} earlier message${messages.length === 1 ? '' : 's'}
+		<span class="resent-roles">· ${Object.entries(counts).map(([r, n]) => `${n} ${esc(r)}`).join(' · ')}</span></summary>
+		${open ? `<div class="msgs">${messages.map(renderResentMessage).join('')}</div>` : ''}</details>`;
+}
+
+export function renderNormRequest(req, prevReq, key) {
 	let html = `<div class="params">${paramPills(req.params)}</div><div class="msgs">`;
 	if (req.system) html += renderWireMessage('system', req.system);
 	if (req.tools.length) {
@@ -53,15 +88,15 @@ export function renderNormRequest(req, prevReq) {
 			<details class="fold"><summary>tool definitions</summary><pre class="json">${highlightJson(req.tools.map((t) => t.def))}</pre></details></div>`;
 	}
 	// Messages already sent in the previous round-trip are re-sent: the model is stateless.
-	const prev = prevReq ? prevReq.messages : null;
-	const isPrefix = prev && prev.length > 0 && prev.length < req.messages.length
-		&& JSON.stringify(prev[0].raw) === JSON.stringify(req.messages[0].raw);
-	req.messages.forEach((m, i) => {
-		const fresh = isPrefix && i >= prev.length;
-		const resent = isPrefix && i < prev.length;
-		html += renderWireMessage(m.role, m.blocks, fresh ? 'fresh' : '',
-			fresh ? '<span class="tag fresh">new</span>' : resent ? '<span class="tag muted">re-sent</span>' : '');
-	});
+	// Only the leading messages sent exactly as before count: once one differs (say, an advisor
+	// summarized earlier turns), it and everything after it are new and shown in full.
+	const prev = prevReq ? prevReq.messages : [];
+	let same = 0;
+	while (same < prev.length && same < req.messages.length
+		&& JSON.stringify(prev[same].raw) === JSON.stringify(req.messages[same].raw)) same++;
+	if (!same) return html + req.messages.map((m) => renderWireMessage(m.role, m.blocks)).join('') + '</div>';
+	html += renderResentGroup(req.messages.slice(0, same), 'resent:' + key);
+	html += req.messages.slice(same).map((m) => renderWireMessage(m.role, m.blocks, 'fresh', '<span class="tag fresh">new</span>')).join('');
 	return html + '</div>';
 }
 
@@ -261,7 +296,7 @@ export function renderWire(wire) {
 	}
 	else if (nreq) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv"><div class="cols">
-			<div><div class="col-title">→ request to ${esc(nreq.params.model || wire.req.provider)}</div>${renderNormRequest(nreq, previousConversation(wire))}</div>
+			<div><div class="col-title">→ request to ${esc(nreq.params.model || wire.req.provider)}</div>${renderNormRequest(nreq, previousConversation(wire), wire.id)}</div>
 			<div><div class="col-title">← response</div>${renderNormResponse(wire)}</div></div></div>`;
 	}
 	body += `<div class="pane ${tab === 'req' ? 'on' : ''}" data-pane="req"><div class="col-title">${esc(wire.req.url)}</div><pre class="json">${prettyMaybeJson(wire.req.body)}</pre></div>`;

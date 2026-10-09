@@ -182,6 +182,11 @@ details.msg.system .text { max-height: 12rem; font-size: .85rem; }
 .msg.removed { background: var(--removed-soft); outline: 1px dashed var(--removed); opacity: .8; }
 .msg.removed .text { text-decoration: line-through; }
 .msg.fresh { outline: 1px solid var(--accent); }
+details.resent { border: 1px dashed var(--line); border-radius: .45rem; padding: .3rem .6rem; }
+details.resent > summary { list-style: none; cursor: pointer; display: flex; gap: .5rem; align-items: center; font-size: .85rem; color: var(--muted); }
+details.resent > summary::-webkit-details-marker { display: none; }
+details.resent .resent-roles { font-size: .8rem; }
+details.resent[open] > .msgs { margin-top: .4rem; }
 .tag { font-size: .65rem; font-weight: 700; padding: .05rem .4rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .05em; }
 .tag.added { background: var(--added); color: var(--panel); }
 .tag.removed { background: var(--removed); color: var(--panel); }

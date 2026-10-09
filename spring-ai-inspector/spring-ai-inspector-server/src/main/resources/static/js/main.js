@@ -34,6 +34,9 @@ function selectLinkedRun() {
 document.addEventListener('toggle', (e) => {
 	const key = e.target.dataset && e.target.dataset.key;
 	if (key) state.open.set(key, e.target.open);
+	// A lazy fold renders its content only when open: render it now. Details rendered open also
+	// fire toggle, so only when the content is still missing (just the summary), or it would loop.
+	if (key && e.target.open && 'lazy' in e.target.dataset && e.target.children.length === 1) render();
 }, true);
 // Scroll events don't bubble: listen in the capture phase for the sequence diagram's sideways scroll.
 document.addEventListener('scroll', (e) => {
