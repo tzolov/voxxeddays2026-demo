@@ -167,6 +167,7 @@ details[open] > summary .chev { transform: rotate(90deg); }
 .msg .role { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; display: flex; gap: .5rem; align-items: center; }
 .msg .text { white-space: pre-wrap; word-break: break-word; max-height: 18rem; overflow: auto; margin-top: .15rem; }
 .msg.user { border-color: var(--user); } .msg.user .role { color: var(--user); }
+.msg.user .text { max-height: 9rem; } /* a stuffed or templated prompt can be long: it scrolls */
 .msg.assistant { border-color: var(--assistant); } .msg.assistant .role { color: var(--assistant); }
 .msg.system { border-color: var(--system); } .msg.system .role { color: var(--system); }
 .msg.tool { border-color: var(--tool); } .msg.tool .role { color: var(--tool); }
@@ -235,6 +236,7 @@ details.resent[open] > .msgs { margin-top: .4rem; }
 .params { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .5rem; }
 .params .pill b { font-weight: 600; }
 .params .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+pre.json.text-json { margin-top: .25rem; background: transparent; } /* the message's tint (added, removed) shows through */
 pre.json { margin: 0; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: .45rem; padding: .6rem .75rem; overflow: auto; max-height: 36rem; white-space: pre-wrap; word-break: break-word; }
 .j-key { color: var(--j-key); } .j-str { color: var(--j-str); } .j-num { color: var(--j-num); } .j-lit { color: var(--j-lit); font-weight: 600; }
 table.headers { border-collapse: collapse; font-size: .8rem; width: 100%; }

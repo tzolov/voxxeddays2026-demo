@@ -1,4 +1,4 @@
-import { esc, fmtNum, isOpen, prettyMaybeJson } from '../util.js';
+import { esc, fmtNum, isOpen, prettyMaybeJson, renderText } from '../util.js';
 import { renderBlock } from './wire.js';
 
 export const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
@@ -23,7 +23,7 @@ export function renderAnswerMessage(m, key) {
 	// A thinking block Spring AI returned as a generation of its own (see InspectorAdvisor).
 	if (m.thinking) return renderBlock({ type: 'thinking', text: m.text, signed: m.thinking === 'signed', redacted: m.thinking === 'redacted' });
 	if (!m.text || (m.toolCalls || []).length || (m.media || []).length) return renderSpringMessage(m);
-	return renderFoldedMessage(esc(m.role || 'assistant'), '', '', m.text, `<div class="text">${esc(m.text)}</div>`, key, false);
+	return renderFoldedMessage(esc(m.role || 'assistant'), '', '', m.text, () => renderText(m.text), key, false);
 }
 
 // ---------------------------------------------------------------- generic (Spring AI) message rendering
@@ -31,9 +31,9 @@ export function renderSpringMessage(m, mark) {
 	const role = m.role || 'user';
 	const cls = mark ? ' ' + mark : '';
 	const tags = `${mark === 'added' ? '<span class="tag added">+ added by advisors</span>' : ''}${mark === 'removed' ? '<span class="tag removed">− removed by advisors</span>' : ''}`;
-	if (role === 'system' && m.text) return renderSystemMessage(cls, tags, m.text, `<div class="text">${esc(m.text)}</div>`);
+	if (role === 'system' && m.text) return renderSystemMessage(cls, tags, m.text, renderText(m.text));
 	let html = `<div class="msg ${esc(role)}${cls}"><div class="role">${esc(role)}${tags}</div>`;
-	if (m.text) html += `<div class="text">${esc(m.text)}</div>`;
+	if (m.text) html += renderText(m.text);
 	for (const tc of m.toolCalls || []) {
 		html += `<div class="block tool-use"><div class="block-label">tool call</div><span class="fn">${esc(tc.name)}</span><pre>${prettyMaybeJson(tc.arguments)}</pre></div>`;
 	}

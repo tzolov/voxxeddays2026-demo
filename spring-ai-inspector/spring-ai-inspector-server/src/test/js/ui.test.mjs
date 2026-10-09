@@ -15,6 +15,7 @@ import { runTotals } from '../../main/resources/static/js/render/page.js';
 import { renderRag } from '../../main/resources/static/js/render/rag.js';
 import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
+import { indentJson, prettyMaybeJson } from '../../main/resources/static/js/util.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
 import { noulLeaning, renderBlock, renderNormRequest, renderWire } from '../../main/resources/static/js/render/wire.js';
 import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
@@ -807,15 +808,45 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 
 test('answers fold to a one-line preview and remember being opened', () => {
 	const m = { role: 'assistant', text: 'Shops open now:\nFoo, Bar.' };
-	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /^<details class="msg assistant" data-key="ans:c1:0" >/);
+	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /^<details class="msg assistant" data-key="ans:c1:0" data-lazy >/);
 	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /sys-preview">Shops open now: Foo, Bar\.</);
 	state.open.set('ans:c1:0', true);
-	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /data-key="ans:c1:0" open>/);
+	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /data-key="ans:c1:0" data-lazy open>/);
 	// Thinking returned as a generation of its own is shown as thinking, not as an empty answer.
 	const thinking = renderAnswerMessage({ role: 'assistant', text: '', thinking: 'signed' }, 'k');
 	assert.match(thinking, /thinking · hidden \(signature only\)/);
 	assert.doesNotMatch(thinking, /msg assistant/);
 	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', toolCalls: [{ name: 'weather', arguments: '{}' }] }, 'k'), /<details/);
+});
+
+test('JSON answers are pretty-printed as sent, other text is left as is', () => {
+	const answer = (text) => { state.open.set('ans', true); return renderAnswerMessage({ role: 'assistant', text }, 'ans'); };
+	const json = answer('{ "evaluation": "mostly helpful", "rating": 3 }');
+	assert.match(json, /<pre class="json text text-json">\{\n  <span class="j-key">&quot;evaluation&quot;<\/span>: <span class="j-str">&quot;mostly helpful&quot;<\/span>,\n  <span class="j-key">&quot;rating&quot;<\/span>: <span class="j-num">3<\/span>\n\}<\/pre>/);
+	// The one-line preview stays the text as answered.
+	assert.match(json, /sys-preview">\{ &quot;evaluation&quot;: &quot;mostly helpful&quot;, &quot;rating&quot;: 3 \}</);
+	// Closed, the answer's body is not rendered at all.
+	state.open.set('ans', false);
+	assert.doesNotMatch(renderAnswerMessage({ role: 'assistant', text: '{"a":1}' }, 'ans'), /text-json/);
+
+	// Re-indented, not re-serialized: digits, key order and duplicate keys are what was sent.
+	assert.equal(indentJson('{"id":12345678901234567890,"b":1,"2":[],"b":{"s":"a, {b}: \\"c\\""}}'),
+		'{\n  "id": 12345678901234567890,\n  "b": 1,\n  "2": [],\n  "b": {\n    "s": "a, {b}: \\"c\\""\n  }\n}');
+	assert.match(prettyMaybeJson('{"id":12345678901234567890}'), /12345678901234567890/);
+	assert.equal(prettyMaybeJson('not json'), 'not json');
+
+	// A fence is pretty-printed too, but shown.
+	const fenced = answer('```json\n[1, 2]\n```');
+	assert.match(fenced, /<span class="tag muted">in a ```json fence<\/span><pre class="json text text-json">\[\n  <span class="j-num">1<\/span>,/);
+	assert.doesNotMatch(answer('[1, 2]'), /json fence/);
+	for (const text of ['{ not json }', '42', 'Shops: {Foo, Bar}']) {
+		assert.doesNotMatch(answer(text), /text-json/);
+		assert.match(answer(text), /<div class="text">/);
+	}
+	// Also in the conversation on the wire, and for system prompts; a removed message keeps its mark.
+	assert.match(renderBlock({ type: 'text', text: '{"a":true}' }), /<pre class="json text text-json">\{\n  <span class="j-key">&quot;a&quot;<\/span>: <span class="j-lit">true<\/span>/);
+	assert.match(renderSpringMessage({ role: 'system', text: '{"a":1}' }), /text-json/);
+	assert.match(renderSpringMessage({ role: 'user', text: '{"a":1}' }, 'removed'), /<div class="msg user removed">.*<pre class="json text text-json">/s);
 });
 
 test('re-sent messages fold to one line, new ones stay open', () => {

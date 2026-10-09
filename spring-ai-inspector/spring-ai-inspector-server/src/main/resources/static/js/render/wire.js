@@ -2,7 +2,7 @@ import { adapterOf, inputCount, normRequest, normResponse, providerLabel } from 
 import { hash, renderFoldedMessage, renderSystemMessage } from './messages.js';
 import { state } from '../state.js';
 import { wireModelKey } from './tokens.js';
-import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson } from '../util.js';
+import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson, renderText } from '../util.js';
 
 // ---------------------------------------------------------------- wire rendering
 export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /end_turn|^stop$|^completed$/.test(stop || '') ? 'stop-end_turn' : '';
@@ -10,7 +10,7 @@ export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /
 export function renderBlock(b) {
 	switch (b.type) {
 		case 'text':
-			return `<div class="text">${esc(b.text)}</div>${b.note ? `<span class="tag muted">${esc(b.note)}</span>` : ''}`;
+			return `${renderText(b.text)}${b.note ? `<span class="tag muted">${esc(b.note)}</span>` : ''}`;
 		case 'tool_use':
 			return `<div class="block tool-use"><div class="block-label">tool call${b.id ? ' · ' + esc(b.id) : ''}</div><span class="fn">${esc(b.name)}</span><pre>${highlightJson(b.input ?? {})}</pre></div>`;
 		case 'tool_result':
