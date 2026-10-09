@@ -114,7 +114,8 @@ How the starter hooks in:
   provider base URLs at the inspector's recording proxy (`/r/<runId>/<provider>`):
   - `spring.ai.anthropic.base-url`: always. The proxy forwards to the base-url the app had before (a gateway, a
     mitmweb, ...), or to `https://api.anthropic.com` when none was set.
-  - `spring.ai.openai.base-url`: only if unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
+  - `spring.ai.openai.base-url` and `spring.ai.openai.responses.base-url` (the Responses API client's own): only if both
+    are unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
     `spring.ai.inspector.route.openai=always` routes it anyway, for an OpenAI-compatible endpoint whose base URL ends in `/v1`
     (e.g. Amazon Bedrock mantle).
   - `spring.ai.ollama.base-url`: only if unset or pointing at `localhost:11434`.
@@ -130,7 +131,7 @@ How the starter hooks in:
 - Models that make no HTTP calls (e.g. jinfer running in the JVM) or providers that aren't routed are still shown:
   their round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
   model and token usage it reported (marked "no HTTP"), in the cards, the tokens panel and the sequence view.
-- The run header lists the configured chat models of any provider (`spring.ai.<provider>.chat[.options].model`).
+- The run header lists the configured chat models of any provider (`spring.ai.<provider>.chat[.options].model`, and `spring.ai.<provider>.responses.model` for OpenAI's Responses API).
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.
 - Tool executions are reported from Spring AI's tool-calling observations. The demos don't include Boot's
@@ -181,7 +182,7 @@ spring-ai-inspector-server/src/main/resources/static/
     ├── main.js          entry point: DOM listeners, live event stream, deep links (the only module touching the DOM on load)
     ├── state.js         UI state and preferences
     ├── model.js         turns events into runs, calls, round-trips, tool runs, links
-    ├── providers.js     wire-format adapters (Anthropic, OpenAI, Ollama, Mistral, DeepSeek, TypeSafe)
+    ├── providers.js     wire-format adapters (Anthropic, OpenAI Chat Completions and Responses, Ollama, Mistral, DeepSeek, TypeSafe)
     ├── util.js          escaping, formatting, JSON highlighting
     ├── io.js · replay.js  export/import, replay
     └── render/          cards, wire, messages, rag, memory, sequence, page
@@ -201,8 +202,8 @@ node --test spring-ai-inspector/spring-ai-inspector-server/src/test/js/*.test.mj
   fail (connection refused) until the inspector is back on the same port. Restarting the inspector is fine; stopping
   it for good means restarting the apps too (they then talk to the providers directly again).
 
-- Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic) and Ollama
-  (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
+- Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic), OpenAI's
+  Responses API (`/v1/responses`, also from OpenAI-compatible providers) and Ollama (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
 - Other endpoints that go through the proxy, such as embeddings, are captured but shown as raw JSON only.
 - A `ChatClient` built with `ChatClient.builder(chatModel)` instead of the injected builder gets no advisor
   events, but its wire traffic is still captured.

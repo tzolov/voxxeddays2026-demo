@@ -88,6 +88,31 @@ class InspectorEnvironmentPostProcessorTest {
 	}
 
 	@Test
+	void routesOpenAisResponsesApiClientToo() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url, "spring.ai.openai.chat.api", "responses",
+				"spring.ai.openai.responses.model", "gpt-6-luna"));
+
+		// Its own base-url, if set, would win over the common one: both point at the proxy.
+		assertThat(env.getProperty("spring.ai.openai.base-url")).startsWith(url + "/r/").endsWith("/openai/v1");
+		assertThat(env.getProperty("spring.ai.openai.responses.base-url")).isEqualTo(env.getProperty("spring.ai.openai.base-url"));
+		assertThat(env.getProperty("spring.ai.inspector.models")).isEqualTo("gpt-6-luna");
+	}
+
+	@Test
+	void leavesAResponsesApiClientAtAProviderSpecificEndpointAlone() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.openai.responses.base-url", "https://my-resource.openai.azure.com"));
+
+		assertThat(env.getProperty("spring.ai.openai.responses.base-url")).isEqualTo("https://my-resource.openai.azure.com");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.openai")).isNull();
+		assertThat(env.getProperty("spring.ai.inspector.routed").split(",")).doesNotContain("openai");
+	}
+
+	@Test
 	void routesAnOpenAiCompatibleEndpointWhenAsked() throws IOException {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 

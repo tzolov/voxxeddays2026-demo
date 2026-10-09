@@ -56,8 +56,12 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 
 	static final String PROXY_PREFIX = "spring.ai.inspector.proxy.";
 
-	/** e.g. spring.ai.anthropic.chat.options.model, spring.ai.jinfer.chat.model */
-	private static final Pattern CHAT_MODEL = Pattern.compile("spring\\.ai\\.([a-z0-9.-]+)\\.chat\\.(options\\.)?model");
+	/**
+	 * e.g. spring.ai.anthropic.chat.options.model, spring.ai.jinfer.chat.model, or the model of
+	 * OpenAI's Responses API: spring.ai.openai.responses.model
+	 */
+	private static final Pattern CHAT_MODEL = Pattern
+		.compile("spring\\.ai\\.([a-z0-9.-]+)\\.(?:chat\\.(options\\.)?|(responses)\\.)model");
 
 	/** The provider of a spring.ai property: spring.ai.openai.base-url -> openai. */
 	private static final Pattern PROPERTY_OWNER = Pattern.compile("spring\\.ai\\.([a-z0-9-]+)\\.");
@@ -85,10 +89,13 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		// Anthropic: always routed, forwarded to whatever it pointed at before.
 		route(props, environment, url, proxy, "anthropic", "", "https://api.anthropic.com",
 				"spring.ai.anthropic.base-url");
-		if (isDefault(environment, "spring.ai.openai.base-url", "api.openai.com")
+		if ((isDefault(environment, "spring.ai.openai.base-url", "api.openai.com")
+				&& isDefault(environment, "spring.ai.openai.responses.base-url", "api.openai.com"))
 				|| "always".equalsIgnoreCase(environment.getProperty("spring.ai.inspector.route.openai"))) {
-			// The OpenAI SDK's base URL includes the /v1 version segment.
-			route(props, environment, url, proxy, "openai", "/v1", "https://api.openai.com", "spring.ai.openai.base-url");
+			// The OpenAI SDK's base URL includes the /v1 version segment. The Responses API client
+			// (spring.ai.openai.chat.api=responses) has a base-url of its own, which wins when set.
+			route(props, environment, url, proxy, "openai", "/v1", "https://api.openai.com", "spring.ai.openai.base-url",
+					"spring.ai.openai.responses.base-url");
 		}
 		if (isDefault(environment, "spring.ai.ollama.base-url", "localhost:11434", "127.0.0.1:11434")) {
 			route(props, environment, url, proxy, "ollama", "", "http://localhost:11434", "spring.ai.ollama.base-url");
@@ -193,18 +200,21 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 
 	/**
 	 * The configured chat models, of any provider: {@code spring.ai.<provider>.chat.model} or
-	 * {@code spring.ai.<provider>.chat.options.model} (e.g. jinfer's in-JVM models too).
+	 * {@code spring.ai.<provider>.chat.options.model} (e.g. jinfer's in-JVM models too), and
+	 * {@code spring.ai.<provider>.responses.model} (OpenAI's Responses API).
 	 */
 	static String models(ConfigurableEnvironment environment) {
-		// Per provider: chat.options.model wins over chat.model, as Spring AI resolves it.
+		// Per provider: chat.options.model wins over chat.model, as Spring AI resolves it. A Responses
+		// API model is listed on its own.
 		Map<String, String> models = new LinkedHashMap<>();
 		for (String key : propertyNames(environment)) {
 			java.util.regex.Matcher matcher = CHAT_MODEL.matcher(key);
 			if (matcher.matches()) {
 				try {
 					String model = environment.getProperty(key);
-					if (model != null && !model.isBlank() && (matcher.group(2) != null || !models.containsKey(matcher.group(1)))) {
-						models.put(matcher.group(1), model);
+					String owner = matcher.group(3) != null ? matcher.group(1) + ".responses" : matcher.group(1);
+					if (model != null && !model.isBlank() && (matcher.group(2) != null || !models.containsKey(owner))) {
+						models.put(owner, model);
 					}
 				}
 				catch (IllegalArgumentException ex) {

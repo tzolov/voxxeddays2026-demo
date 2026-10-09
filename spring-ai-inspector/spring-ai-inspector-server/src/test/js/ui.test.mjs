@@ -648,6 +648,68 @@ test('openai: merges streamed tool-call fragments and reads DeepSeek reasoning',
 	assert.equal(ADAPTERS.deepseek, ADAPTERS.openai);
 });
 
+test('openai responses: items become a conversation, with the instructions, tools and function calls', () => {
+	const req = {
+		model: 'gpt-6-luna', instructions: 'Use toolSearchTool.', store: false,
+		tools: [{ type: 'function', name: 'toolSearchTool', parameters: { type: 'object' } }],
+		input: [
+			{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'What to wear?' }] },
+			{ type: 'reasoning', id: 'rs_1', summary: [] },
+			{ type: 'function_call', call_id: 'call_1', name: 'toolSearchTool', arguments: '{"query":"weather"}' },
+			{ type: 'function_call_output', call_id: 'call_1', output: '["weather"]' },
+		],
+	};
+	const resp = { status: 'completed', output: [
+		{ type: 'reasoning', id: 'rs_2', summary: [{ type: 'summary_text', text: 'Need the weather.' }] },
+		{ type: 'function_call', call_id: 'call_2', name: 'weather', arguments: '{"location":"Amsterdam"}' }],
+	usage: { input_tokens: 120, input_tokens_details: { cached_tokens: 64 }, output_tokens: 30, output_tokens_details: { reasoning_tokens: 20 } } };
+	const w = wire('openai', '/v1/responses', req, JSON.stringify(resp));
+
+	const n = normRequest(w);
+	assert.equal(n.params.model, 'gpt-6-luna');
+	assert.equal(n.system[0].text, 'Use toolSearchTool.');
+	assert.deepEqual(n.tools.map((t) => t.name), ['toolSearchTool']);
+	// The reasoning and the function call it led to are one assistant turn; the result is named after its call.
+	assert.deepEqual(n.messages.map((m) => m.role), ['user', 'assistant', 'tool']);
+	assert.deepEqual(n.messages[1].blocks.map((b) => b.type), ['thinking', 'tool_use']);
+	assert.equal(n.messages[1].blocks[0].hidden, true);
+	assert.deepEqual(n.messages[2].blocks[0], { type: 'tool_result', id: 'call_1', name: 'toolSearchTool', content: '["weather"]' });
+
+	const r = normResponse(w);
+	assert.equal(r.stop, 'tool_calls');
+	assert.deepEqual(r.usage, { input: 120, output: 30, cacheRead: 64, reasoning: 20 });
+	assert.equal(r.blocks[0].text, 'Need the weather.');
+	assert.deepEqual(r.blocks[1], { type: 'tool_use', id: 'call_2', name: 'weather', input: { location: 'Amsterdam' } });
+
+	const html = renderWire(w);
+	assert.match(html, /<span class="pill">gpt-6-luna<\/span><span class="pill">3 msgs<\/span><span class="pill">1 tools<\/span>/);
+	assert.match(html, /⚙ weather/);
+	assert.match(html, />Conversation<\/button>/);
+	// A plain string input is one user message; a routed provider of another name is recognized by the path.
+	assert.equal(normRequest(wire('azure', '/openai/v1/responses', { input: 'hi' }, '{}')).messages[0].blocks[0].text, 'hi');
+	// A stored item referenced by id has no content in the request: it is not shown as a turn.
+	const ref = normRequest(wire('openai', '/v1/responses', { input: [{ type: 'item_reference', id: 'msg_1' }, { role: 'user', content: 'again' }] }, '{}'));
+	assert.deepEqual(ref.messages.map((m) => m.role), ['user']);
+});
+
+test('openai responses: a streamed response is read from its last lifecycle event', () => {
+	const events = [
+		{ type: 'response.created', response: { status: 'in_progress', output: [] } },
+		{ type: 'response.output_text.delta', delta: 'Wear a ' },
+		{ type: 'response.completed', response: { status: 'completed',
+			output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Wear a T-shirt.' }] }],
+			usage: { input_tokens: 10, output_tokens: 5 } } },
+	].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n`).join('\n');
+	const r = normResponse(wire('openai', '/v1/responses', { model: 'gpt', stream: true, input: [] }, events, 'text/event-stream'));
+	assert.equal(r.stop, 'completed');
+	assert.equal(r.blocks[0].text, 'Wear a T-shirt.');
+	assert.equal(r.usage.output, 5);
+
+	const failed = normResponse(wire('openai', '/v1/responses', { input: [] },
+		JSON.stringify({ error: { type: 'invalid_request_error', message: 'Unknown model' } })));
+	assert.equal(failed.error, 'invalid_request_error: Unknown model');
+});
+
 test('ollama: joins newline-delimited stream chunks', () => {
 	const ndjson = [
 		{ message: { role: 'assistant', content: 'Hel' }, done: false },

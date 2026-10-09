@@ -205,7 +205,7 @@ sequenceDiagram
    mistaken for it. If there is no inspector, it returns and the app is untouched.
 2. It creates a run id (8 hex characters) and works out a readable app name from the main class location, e.g.
    `03-chat-memory · DemoApplication`. It also lists the configured chat models from
-   `spring.ai.<provider>.chat[.options].model`. Environment variables count too.
+   `spring.ai.<provider>.chat[.options].model` and `spring.ai.<provider>.responses.model`. Environment variables count too.
 3. It **points each provider's base URL at the inspector's proxy**:
    `spring.ai.anthropic.base-url=http://localhost:9001/r/<runId>/anthropic`. The new values go into a property
    source added *first*, so they win over `application.properties`, environment variables and command-line
@@ -231,7 +231,7 @@ Which base URLs are rewritten:
 |---|---|---|
 | Anthropic | `spring.ai.anthropic.base-url` | always: paths are simply appended to the base URL |
 | TypeSafe (Jev) | `spring.ai.typesafe.base-url` | always |
-| OpenAI | `spring.ai.openai.base-url` | unset or `api.openai.com`, or with `spring.ai.inspector.route.openai=always` |
+| OpenAI | `spring.ai.openai.base-url`, `spring.ai.openai.responses.base-url` | both unset or `api.openai.com`, or with `spring.ai.inspector.route.openai=always` |
 | Ollama | `spring.ai.ollama.base-url` | unset or `localhost:11434` |
 | Mistral AI | `spring.ai.mistralai.base-url`, `spring.ai.mistralai.chat.base-url` | unset or `api.mistral.ai` |
 | DeepSeek | `spring.ai.deepseek.base-url` | unset or `api.deepseek.com` |

@@ -60,11 +60,11 @@ public class TsTAutoconfDemoApplication {
 				.defaultAdvisors(new TokenCounterAdvisor())
 				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, "chat_memory_conversation_id"))
 				.build();
-			var answer = chatClient.prompt("""
-					Help me plan what to wear today in Landsmeer, NL.
-					Please suggest clothing shops that are open right now in the area.
 
-					Do not make assumptions about the date, time. Use the tools for getting the current time.
+			var answer = chatClient.prompt("""
+					Help me buy clothes today in Landsmeer, NL.
+					I need to wear something suitable for the weather.
+					Please suggest clothing shops that are open right now in the area.					
 					""")
 					.call().content();
 

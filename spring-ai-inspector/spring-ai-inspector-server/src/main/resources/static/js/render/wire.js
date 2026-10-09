@@ -5,7 +5,7 @@ import { wireModelKey } from './tokens.js';
 import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson } from '../util.js';
 
 // ---------------------------------------------------------------- wire rendering
-export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /end_turn|^stop$/.test(stop || '') ? 'stop-end_turn' : '';
+export const stopClass = (stop) => /tool/.test(stop || '') ? 'stop-tool_use' : /end_turn|^stop$|^completed$/.test(stop || '') ? 'stop-end_turn' : '';
 
 export function renderBlock(b) {
 	switch (b.type) {
@@ -19,6 +19,7 @@ export function renderBlock(b) {
 			if (b.text) return `<div class="block"><div class="block-label">thinking</div><div class="text">${esc(b.text)}</div></div>`;
 			// Reasoning not returned: the block only carries what the model needs to resume it.
 			const [label, why] = b.redacted ? ['redacted (encrypted)', 'The reasoning was encrypted by the provider and is sent back as is.']
+				: b.hidden ? ['hidden', 'The reasoning is not returned, only a reference to it, which is sent back so the model can continue from it.']
 				: b.signed ? ['hidden (signature only)', 'The reasoning is not returned, only its signature, which is sent back so the model can continue from it.']
 				: ['empty', 'The model returned an empty thinking block.'];
 			return `<div class="block" title="${esc(why)}"><div class="block-label">thinking · ${label}</div></div>`;

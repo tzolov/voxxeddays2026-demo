@@ -162,6 +162,75 @@ export const ADAPTERS = {
 ADAPTERS.mistralai = ADAPTERS.openai;
 ADAPTERS.deepseek = ADAPTERS.openai;
 
+// OpenAI's Responses API (spring.ai.openai.chat.api=responses): a flat list of typed items instead
+// of messages. A turn's reasoning, text and function calls are separate items, merged here into one
+// assistant message; a tool result is a `function_call_output` item, named after its call.
+const responsesText = (content) => typeof content === 'string' ? [{ type: 'text', text: content }]
+	: (content || []).map((p) => /^(input|output)_text$/.test(p.type) ? { type: 'text', text: p.text }
+		: p.type === 'refusal' ? { type: 'text', text: '⛔ refusal: ' + p.refusal }
+		: { type: 'media', label: p.type });
+const responsesItem = (it, names = {}) => {
+	switch (it.type) {
+		case 'message': case undefined: return responsesText(it.content);
+		case 'function_call': case 'custom_tool_call':
+			return [{ type: 'tool_use', id: it.call_id, name: it.name, input: asArgs(it.arguments ?? it.input) }];
+		case 'function_call_output': case 'custom_tool_call_output':
+			return [{ type: 'tool_result', id: it.call_id, name: names[it.call_id],
+				content: typeof it.output === 'string' ? it.output : responsesText(it.output).map((p) => p.text ?? p.label).join('\n') }];
+		case 'reasoning': {
+			const text = [...(it.summary || []), ...(it.content || [])].map((s) => s.text ?? '').join('\n');
+			// Unless a summary was asked for, only the item (or its encrypted form) comes back.
+			return [{ type: 'thinking', text, redacted: !text && !!it.encrypted_content, hidden: !text && !it.encrypted_content }];
+		}
+		default: return [{ type: 'raw', label: it.type, value: it }];
+	}
+};
+const responsesRole = (it) => it.type === 'function_call_output' || it.type === 'custom_tool_call_output' ? 'tool'
+	: it.type && it.type !== 'message' ? 'assistant' // function calls, reasoning, built-in tool calls
+	: it.role === 'developer' ? 'system' : it.role;
+
+export const RESPONSES = {
+	matches: (path) => /\/v1\/responses$/.test(path),
+	request: (req) => {
+		const items = typeof req.input === 'string' ? [{ role: 'user', content: req.input }] : (req.input || []);
+		const names = Object.fromEntries(items.filter((it) => it.call_id && it.name).map((it) => [it.call_id, it.name]));
+		const messages = [];
+		for (const it of items) {
+			if (it.type === 'item_reference') continue; // a stored item, by id: its content isn't in the request
+			const role = responsesRole(it); const last = messages[messages.length - 1];
+			if (role === 'assistant' && last?.role === 'assistant') { last.blocks.push(...responsesItem(it, names)); last.raw.push(it); }
+			else messages.push({ role, blocks: responsesItem(it, names), raw: [it] });
+		}
+		return {
+			params: pick(req, ['model', 'max_output_tokens', 'temperature', 'stream', 'tool_choice', 'reasoning', 'text', 'store', 'previous_response_id']),
+			system: req.instructions ? [{ type: 'text', text: req.instructions }] : null,
+			tools: openAiTools(req.tools),
+			messages,
+		};
+	},
+	response: (body, streamed) => {
+		let r = parseJson(body);
+		if (streamed || !r) {
+			// The last lifecycle event carries the whole response; items done so far if the stream was cut.
+			const events = sseData(body);
+			const err = events.find((e) => e.type === 'error');
+			if (err) return { error: `${err.code || 'error'}: ${err.message}` };
+			const final = events.filter((e) => /^response\.(completed|incomplete|failed)$/.test(e.type)).pop();
+			r = final?.response ?? { status: 'in_progress', output: events.filter((e) => e.type === 'response.output_item.done').map((e) => e.item) };
+		}
+		if (r.error) return { error: `${r.error.type || r.error.code}: ${r.error.message}` };
+		const output = r.output || [];
+		const u = r.usage || {};
+		return {
+			stop: output.some((it) => it.type === 'function_call' || it.type === 'custom_tool_call') && r.status === 'completed' ? 'tool_calls'
+				: r.status === 'incomplete' ? `incomplete: ${r.incomplete_details?.reason ?? '?'}` : r.status,
+			blocks: output.flatMap((it) => responsesItem(it)),
+			usage: { input: u.input_tokens, output: u.output_tokens, cacheRead: u.input_tokens_details?.cached_tokens,
+				reasoning: u.output_tokens_details?.reasoning_tokens },
+		};
+	},
+};
+
 // TypeSafe Jev systemOne: a JSON `state` plus named questions (noul | score | choice), answered with probabilities.
 ADAPTERS.typesafe = {
 	kind: 'systemone',
@@ -227,6 +296,8 @@ export function adapterOf(wire) {
 	const a = ADAPTERS[provider];
 	if (a && a.matches(path)) return a;
 	if (EMBEDDINGS.matches(path) && (EMBEDDINGS.providers.has(provider) || !a)) return EMBEDDINGS;
+	// OpenAI's Responses API, also served by OpenAI-compatible providers next to Chat Completions.
+	if (RESPONSES.matches(path)) return RESPONSES;
 	// A provider routed by a name of its own (spring.ai.inspector.proxy.<name>): recognized by its API's path.
 	return a ? null : [...new Set(Object.values(ADAPTERS))].find((x) => x.matches(path)) ?? null;
 }
