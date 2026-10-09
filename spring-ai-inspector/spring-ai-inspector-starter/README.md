@@ -504,8 +504,9 @@ Nothing else is needed when the app uses the usual Spring Boot beans:
 
 The starter instruments beans and auto-configured builders. Objects the app creates itself need a small change.
 
-**A `ChatClient` built from the model**, e.g. `ChatClient.builder(chatModel)`, gets no advisors. Its wire traffic
-is still recorded. Prefer the injected builder:
+**A `ChatClient` built from the model**, e.g. `ChatClient.builder(chatModel)`, gets no advisors and uses
+`ObservationRegistry.NOOP`, so neither its ChatClient calls nor its tool runs are recorded. Its wire traffic still is.
+Prefer the injected builder:
 
 ```java
 @Bean
@@ -514,12 +515,14 @@ ChatClient chatClient(ChatClient.Builder builder) {   // auto-configured, alread
 }
 ```
 
-If you need several builders or a specific model, apply the registered customizers yourself:
+If you need several builders or a specific model, pass the registry and apply the registered customizers yourself:
 
 ```java
 @Bean
-ChatClient reviewer(ChatModel chatModel, ObjectProvider<ChatClientBuilderCustomizer> customizers) {
-	ChatClient.Builder builder = ChatClient.builder(chatModel);
+ChatClient reviewer(ChatModel chatModel, ObjectProvider<ObservationRegistry> observationRegistry,
+		ObjectProvider<ChatClientBuilderCustomizer> customizers) {
+	ChatClient.Builder builder = ChatClient.builder(chatModel,
+			observationRegistry.getIfUnique(() -> ObservationRegistry.NOOP), null, null);   // reports tool runs
 	customizers.orderedStream().forEach(c -> c.customize(builder));   // adds the inspector advisors when active
 	return builder.build();
 }
@@ -582,7 +585,7 @@ itself. Don't set them by hand.
 | The run doesn't appear | The inspector wasn't reachable at startup (check `spring.ai.inspector.url`), it started after the app, or `spring.ai.inspector.enabled=false`. |
 | A run, but no "On the wire" calls | The provider isn't routed: a custom base URL or an unlisted provider. See [step 6](#6-route-other-model-providers). |
 | Wire calls, but no ChatClient calls | The `ChatClient` was built with `ChatClient.builder(chatModel)`. See [step 5](#5-cover-what-is-built-by-hand). |
-| No tool runs | The app's `ObservationRegistry` is `ObservationRegistry.NOOP`, which ignores handlers. |
+| No tool runs | The app's `ObservationRegistry` is `ObservationRegistry.NOOP`, which ignores handlers, e.g. a `ChatClient` built with `ChatClient.builder(chatModel)`. See [step 5](#5-cover-what-is-built-by-hand). |
 | `Spring AI Inspector unreachable ..., pausing events for 5s` | The inspector stopped. Events resume when it's back. Routed model calls fail meanwhile. |
 | Model calls fail with "connection refused" to port 9001 | The app was routed through an inspector that has since stopped. Start it again, or restart the app. |
 

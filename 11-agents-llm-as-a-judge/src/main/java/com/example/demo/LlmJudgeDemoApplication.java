@@ -1,12 +1,18 @@
 package com.example.demo;
 
 import java.util.Random;
+import java.util.function.Function;
+
+import io.micrometer.observation.ObservationRegistry;
 
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientBuilderCustomizer;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -21,16 +27,28 @@ public class LlmJudgeDemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(AnthropicChatModel mainChatModel, OllamaChatModel ollamaChatModel) {
+	public CommandLineRunner cli(AnthropicChatModel mainChatModel, OllamaChatModel ollamaChatModel,
+			ObjectProvider<ObservationRegistry> observationRegistry,
+			ObjectProvider<ChatClientBuilderCustomizer> customizers) {
 		return args -> { // @formatter:off
 
-			ChatClient chatClient = ChatClient.builder(mainChatModel)
+			// Builders made from a model get neither the observation registry (which reports tool runs)
+			// nor the registered customizers (e.g. the inspector's advisors), as the auto-configured one does.
+			Function<ChatModel, ChatClient.Builder> builderFor = model -> {
+				ChatClient.Builder builder = ChatClient.builder(model, observationRegistry.getIfUnique(() -> ObservationRegistry.NOOP), null, null);
+				customizers.orderedStream().forEach(c -> c.customize(builder));
+				return builder;
+			};
+			ChatClient.Builder judgeBuilder = builderFor.apply(ollamaChatModel);
+			ChatClient.Builder mainBuilder = builderFor.apply(mainChatModel);
+
+			ChatClient chatClient = mainBuilder
 
 				.defaultTools(new MyTools())
 				
 				.defaultAdvisors(SelfRefineEvaluationAdvisor.builder()
 					.order(Ordered.HIGHEST_PRECEDENCE + 100)
-					.chatClientBuilder(ChatClient.builder(ollamaChatModel))
+					.chatClientBuilder(judgeBuilder)
 					.maxRepeatAttempts(3)
 					.successRating(3)
 					.build())
