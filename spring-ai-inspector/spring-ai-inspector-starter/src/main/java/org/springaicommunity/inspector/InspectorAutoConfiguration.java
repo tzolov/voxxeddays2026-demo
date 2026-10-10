@@ -33,7 +33,7 @@ import org.springframework.core.env.Environment;
 @ConditionalOnProperty(name = "spring.ai.inspector.active", havingValue = "true")
 public class InspectorAutoConfiguration {
 
-	@Bean
+	@Bean(destroyMethod = "shutdown")
 	InspectorClient inspectorClient(Environment env) {
 		return new InspectorClient(env.getProperty("spring.ai.inspector.url", "http://localhost:9001"),
 				env.getRequiredProperty("spring.ai.inspector.run-id"), env.getProperty("spring.ai.inspector.token"));
@@ -51,9 +51,106 @@ public class InspectorAutoConfiguration {
 	}
 
 	@Bean
-	ChatClientBuilderCustomizer inspectorChatClientCustomizer(InspectorClient client, InspectorMemoryReader memoryReader) {
-		return builder -> builder.defaultAdvisors(new InspectorAdvisor(client, Phase.CLIENT, memoryReader),
+	ChatClientBuilderCustomizer inspectorChatClientCustomizer(InspectorClient client, InspectorMemoryReader memoryReader,
+			Environment env) {
+		// Memory snapshots read the stores twice per call; off for apps where that costs.
+		boolean snapshots = env.getProperty("spring.ai.inspector.memory-snapshots", Boolean.class, true);
+		return builder -> builder.defaultAdvisors(new InspectorAdvisor(client, Phase.CLIENT, snapshots ? memoryReader : null),
 				new InspectorAdvisor(client, Phase.MODEL));
+	}
+
+	/** Where the inspector listens, so the correlation headers go only on requests to it. */
+	static java.net.URI inspectorUrl(Environment env) {
+		return java.net.URI.create(env.getProperty("spring.ai.inspector.url", "http://localhost:9001"));
+	}
+
+	/**
+	 * Correlation headers on the model providers' HTTP requests, so the proxy links each
+	 * round-trip to its ChatClient call and model call (see {@link InspectorHttpHeaders}).
+	 * The SDK builders are customized inside a guard: an SDK older than the one the starter
+	 * was built against must not stop the app's client from being built.
+	 */
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = { "org.springframework.ai.anthropic.http.okhttp.AnthropicHttpClientBuilderCustomizer",
+			"okhttp3.Interceptor" })
+	static class AnthropicHeaders {
+
+		@Bean
+		org.springframework.ai.anthropic.http.okhttp.AnthropicHttpClientBuilderCustomizer inspectorAnthropicHeaders(Environment env) {
+			InspectorHttpHeaders.OkHttp interceptor = new InspectorHttpHeaders.OkHttp(inspectorUrl(env));
+			return builder -> {
+				try {
+					builder.interceptor(interceptor);
+				}
+				catch (LinkageError ex) {
+					// no interceptor seam in this version: the proxy links by the open calls instead
+				}
+			};
+		}
+
+	}
+
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = { "org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer",
+			"okhttp3.Interceptor" })
+	static class OpenAiHeaders {
+
+		@Bean
+		org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer inspectorOpenAiHeaders(Environment env) {
+			InspectorHttpHeaders.OkHttp interceptor = new InspectorHttpHeaders.OkHttp(inspectorUrl(env));
+			return builder -> {
+				try {
+					builder.interceptor(interceptor);
+				}
+				catch (LinkageError ex) {
+					// as above
+				}
+			};
+		}
+
+	}
+
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = "org.springframework.boot.restclient.RestClientCustomizer")
+	static class RestClientHeaders {
+
+		@Bean
+		org.springframework.boot.restclient.RestClientCustomizer inspectorRestClientHeaders(Environment env) {
+			return builder -> builder.requestInterceptor(new InspectorHttpHeaders.Rest(inspectorUrl(env)));
+		}
+
+	}
+
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = { "org.springframework.boot.webclient.WebClientCustomizer",
+			"org.springframework.web.reactive.function.client.WebClient" })
+	static class WebClientHeaders {
+
+		@Bean
+		org.springframework.boot.webclient.WebClientCustomizer inspectorWebClientHeaders(Environment env) {
+			return builder -> builder.filter(new InspectorHttpHeaders.Web(inspectorUrl(env)));
+		}
+
+	}
+
+	/**
+	 * Reactor's automatic context propagation keeps the current observation on Reactor
+	 * threads, so a streamed call's searches and embeddings find their call (see
+	 * {@link InspectorCorrelation}). Boot's Reactor auto-configuration switches it on for
+	 * {@code spring.reactor.context-propagation=auto}, but only WebFlux apps have that
+	 * auto-configuration; the starter does the same here (idempotent) when the property says
+	 * so, which {@link InspectorEnvironmentPostProcessor} sets unless the app decided.
+	 */
+	@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(name = { "reactor.core.publisher.Hooks", "io.micrometer.context.ContextRegistry" })
+	@ConditionalOnProperty(name = "spring.reactor.context-propagation", havingValue = "auto")
+	static class ReactorPropagation implements InitializingBean {
+
+		@Override
+		public void afterPropertiesSet() {
+			reactor.core.publisher.Hooks.enableAutomaticContextPropagation();
+		}
+
 	}
 
 	@Bean

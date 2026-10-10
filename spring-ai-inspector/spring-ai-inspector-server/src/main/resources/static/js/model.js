@@ -123,7 +123,8 @@ export function handle(ev) {
 			(call ? call.searches : (run.searches ||= [])).push(ev);
 			break;
 		}
-		case 'vector-add': {
+		case 'vector-add':
+		case 'vector-delete': {
 			const started = ev.opId && run.vectorOps?.get(ev.opId);
 			if (started) { Object.assign(started, ev, { pending: false }); break; }
 			// Inside the ChatClient call that added them (e.g. a tool search indexing its tools), else the run's.

@@ -29,6 +29,10 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code wire-request} / {@code wire-response} events, shaped by {@link WireCapture}:
  * secrets redacted, inline base64 stripped, bodies capped, binary bodies by size only.
  *
+ * <p>Each round-trip is linked to the ChatClient call and the model call it serves by the
+ * {@code X-Inspector-Call} / {@code X-Inspector-Model-Call} headers the starter stamps on
+ * the request (stripped here), falling back to the calls open for the run at that moment.
+ *
  * <p>The upstream is the base URL the application originally had for that provider (the
  * starter reports it in {@code run-start}, so custom gateways keep working), falling back
  * to {@code spring.ai.inspector.upstreams.<provider>}. A run's upstreams are fixed by its
@@ -40,9 +44,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class ProxyController {
 
+	/** Stamped by the starter on each model request: the ChatClient call and model call it serves. */
+	static final String CALL_HEADER = "x-inspector-call";
+
+	static final String MODEL_CALL_HEADER = "x-inspector-model-call";
+
 	private static final Set<String> SKIP_REQUEST_HEADERS = Set.of("host", "content-length", "connection",
 			"accept-encoding", "transfer-encoding", "expect", "upgrade", "keep-alive", "te", "trailer",
-			"http2-settings");
+			"http2-settings", CALL_HEADER, MODEL_CALL_HEADER);
 
 	private static final Set<String> SKIP_RESPONSE_HEADERS = Set.of("content-length", "connection",
 			"transfer-encoding", "keep-alive", ":status");
@@ -115,7 +124,16 @@ public class ProxyController {
 		wireRequest.put("path", path);
 		wireRequest.put("headers", requestHeaders);
 		this.capture.body(wireRequest, body, request.getContentType(), request.getHeader("content-encoding"));
-		wireRequest.putAll(this.store.openCalls(runId));
+		// The call this round-trip serves: from the starter's headers, else the call open for
+		// the run right now (an app without the headers, e.g. an SDK streaming on its own threads).
+		Map<String, Object> open = this.store.openCalls(runId);
+		String call = request.getHeader(CALL_HEADER);
+		String modelCall = request.getHeader(MODEL_CALL_HEADER);
+		wireRequest.put("clientCallId", call != null ? call : open.get("clientCallId"));
+		wireRequest.put("modelCallId", modelCall != null ? modelCall : open.get("modelCallId"));
+		if (call != null || modelCall != null) {
+			wireRequest.put("linkedBy", "header");
+		}
 		this.store.add(wireRequest);
 
 		long start = System.currentTimeMillis();

@@ -115,6 +115,31 @@ class ProxyControllerTest {
 	}
 
 	@Test
+	void linksTheRoundTripByTheStartersHeadersAndStripsThem() throws Exception {
+		this.store.add(new java.util.HashMap<>(Map.of("type", "run-start", "runId", "run5", "upstreams",
+				Map.of("anthropic", upstreamUrl()))));
+		this.store.add(new java.util.HashMap<>(Map.of("type", "client-request", "runId", "run5", "callId", "open-call")));
+		AtomicReference<String> forwardedHeader = new AtomicReference<>();
+		this.upstream.createContext("/gateway/v1/linked", exchange -> {
+			forwardedHeader.set(exchange.getRequestHeaders().getFirst("X-Inspector-Call"));
+			exchange.sendResponseHeaders(200, 0);
+			exchange.close();
+		});
+
+		this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/r/run5/anthropic/v1/linked"))
+			.header("X-Inspector-Call", "c-77").header("X-Inspector-Model-Call", "m-78")
+			.POST(HttpRequest.BodyPublishers.ofString("{}")).build(), HttpResponse.BodyHandlers.ofString());
+		this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/r/run5/anthropic/v1/linked"))
+			.POST(HttpRequest.BodyPublishers.ofString("{}")).build(), HttpResponse.BodyHandlers.ofString());
+
+		assertThat(forwardedHeader.get()).isNull();
+		List<Map<String, Object>> requests = events("wire-request");
+		assertThat(requests.get(0)).containsEntry("clientCallId", "c-77").containsEntry("modelCallId", "m-78").containsEntry("linkedBy", "header");
+		// Without the headers: the call open for the run, as before.
+		assertThat(requests.get(1)).containsEntry("clientCallId", "open-call").doesNotContainKey("linkedBy");
+	}
+
+	@Test
 	void redactsSecretQueryParametersButForwardsThem() throws Exception {
 		this.store.add(new java.util.HashMap<>(Map.of("type", "run-start", "runId", "run3", "upstreams",
 				Map.of("google", upstreamUrl()))));

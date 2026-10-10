@@ -199,6 +199,11 @@ public class InspectorClient {
 		}
 	}
 
+	/** Stops the background sender; events handed to it before are still posted. */
+	public void shutdown() {
+		this.asyncSender.shutdown();
+	}
+
 	/** Waits until the events handed to the background thread so far are posted (tests). */
 	void awaitBackground() {
 		try {

@@ -59,7 +59,7 @@ public class InspectorEmbeddingModelPostProcessor implements BeanPostProcessor {
 			if (!EMBEDDING_METHODS.contains(invocation.getMethod().getName())) {
 				return invocation.proceed();
 			}
-			String clientCallId = InspectorAdvisor.currentCallId();
+			String clientCallId = InspectorCorrelation.currentCallId();
 			Object[] args = invocation.getArguments();
 			long start = System.currentTimeMillis();
 			try {

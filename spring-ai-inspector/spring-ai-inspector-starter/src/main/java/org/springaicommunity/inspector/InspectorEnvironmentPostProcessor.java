@@ -13,7 +13,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 import org.springframework.boot.EnvironmentPostProcessor;
+import org.springframework.boot.logging.DeferredLogFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.EnumerablePropertySource;
@@ -47,6 +51,10 @@ import org.springframework.core.env.SystemEnvironmentPropertySource;
  * that made it. When the inspector is not running nothing changes and the demo talks to
  * the configured base-url as before.
  *
+ * <p>When active, {@code spring.reactor.context-propagation=auto} is set unless the app set
+ * it, so streamed calls keep their observation on Reactor threads;
+ * {@code spring.ai.inspector.reactor-context-propagation=false} leaves it alone.
+ *
  * <p>Set {@code spring.ai.inspector.enabled=false} to opt out, or
  * {@code spring.ai.inspector.url} to use a different inspector address.
  */
@@ -69,6 +77,17 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	/** The providers routed through the proxy, reported with the run (see InspectorAutoConfiguration). */
 	static final String ROUTED = "spring.ai.inspector.routed";
 
+	/** Logging isn't set up this early: Boot replays what is logged here once it is. */
+	private final Log log;
+
+	public InspectorEnvironmentPostProcessor() {
+		this.log = LogFactory.getLog(InspectorEnvironmentPostProcessor.class);
+	}
+
+	public InspectorEnvironmentPostProcessor(DeferredLogFactory logFactory) {
+		this.log = logFactory.getLog(InspectorEnvironmentPostProcessor.class);
+	}
+
 	@Override
 	public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
 		if (!environment.getProperty("spring.ai.inspector.enabled", Boolean.class, true)) {
@@ -77,6 +96,13 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		String url = environment.getProperty("spring.ai.inspector.url", "http://localhost:9001");
 		if (!isInspectorUp(url)) {
 			return;
+		}
+		// Streamed calls run advisors and tools on Reactor threads: with automatic context
+		// propagation they still find the observation they belong to (see InspectorCorrelation).
+		if (environment.getProperty("spring.ai.inspector.reactor-context-propagation", Boolean.class, true)
+				&& property(environment, "spring.reactor.context-propagation") == null) {
+			environment.getPropertySources().addFirst(new MapPropertySource("spring-ai-inspector-reactor",
+					Map.of("spring.reactor.context-propagation", "auto")));
 		}
 
 		Map<String, Object> props = new LinkedHashMap<>();
@@ -131,7 +157,7 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	}
 
 	/** spring.ai.inspector.proxy.<name>=<base-url property>[,...]: routes that provider through the proxy. */
-	private static void routeOnRequest(Map<String, Object> props, ConfigurableEnvironment environment, String url,
+	private void routeOnRequest(Map<String, Object> props, ConfigurableEnvironment environment, String url,
 			String proxy, String key) {
 		String provider = key.substring(PROXY_PREFIX.length());
 		String[] properties = environment.getProperty(key, "").split("\\s*,\\s*");
@@ -146,8 +172,18 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 			route(props, environment, url, proxy, provider, "", upstream, properties);
 		}
 		else {
-			System.err.println("Spring AI Inspector: not routing '" + provider + "', none of "
-					+ String.join(", ", properties) + " is set to an http(s) base URL");
+			this.log.warn("Spring AI Inspector: not routing '" + provider + "', none of " + String.join(", ", properties)
+					+ " is set to an http(s) base URL");
+		}
+	}
+
+	/** A property's value, or null when unset or when its placeholders can't be resolved. */
+	private static String property(ConfigurableEnvironment environment, String name) {
+		try {
+			return environment.getProperty(name);
+		}
+		catch (IllegalArgumentException ex) {
+			return null; // Boot reports the unresolvable placeholder itself when it binds the property
 		}
 	}
 
@@ -160,7 +196,7 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 			String proxy, String provider, String suffix, String defaultUpstream, String... properties) {
 		String original = null;
 		for (String property : properties) {
-			String value = environment.getProperty(property);
+			String value = property(environment, property);
 			if (value != null && !value.isBlank() && !value.startsWith(inspectorUrl)) {
 				original = value;
 				break;
@@ -185,13 +221,31 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		props.merge(ROUTED, String.join(",", routed), (a, b) -> a + "," + b);
 	}
 
+	/**
+	 * Whether a base-url property is unset or points at one of the provider's default hosts
+	 * ({@code host} or {@code host:port}): a gateway whose URL merely mentions the host
+	 * ({@code https://gateway.example/api.openai.com/}) is not the default.
+	 */
 	private static boolean isDefault(ConfigurableEnvironment environment, String property, String... defaults) {
-		String value = environment.getProperty(property);
+		String value = property(environment, property);
 		if (value == null || value.isBlank()) {
 			return true;
 		}
+		String host;
+		String hostPort;
+		try {
+			URI uri = URI.create(value.trim());
+			if (uri.getHost() == null) {
+				return false;
+			}
+			host = uri.getHost().toLowerCase(java.util.Locale.ROOT);
+			hostPort = uri.getPort() > 0 ? host + ":" + uri.getPort() : host;
+		}
+		catch (IllegalArgumentException ex) {
+			return false;
+		}
 		for (String d : defaults) {
-			if (value.contains(d)) {
+			if (d.equalsIgnoreCase(host) || d.equalsIgnoreCase(hostPort)) {
 				return true;
 			}
 		}

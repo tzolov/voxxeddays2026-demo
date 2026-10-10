@@ -176,7 +176,7 @@ export function buildSequence(run) {
 			const opp = opPath(op);
 			const search = ev.query !== undefined;
 			msgs.push({ seq: at, ts: ev.start?.ts ?? ev.ts, from, to, kind: 'vector', path: opp,
-				label: search ? `🔎 ${oneLine(ev.query, 40)}` : `ingest ${ev.count} chunks` });
+				label: search ? `🔎 ${oneLine(ev.query, 40)}` : ev.op === 'delete' || ev.type === 'vector-delete' ? `delete ${ev.filter ? 'by filter' : `${ev.count} ids`}` : `ingest ${ev.count} chunks` });
 			if (!ev.pending) {
 				msgs.push({ seq: ev.seq, ts: ev.ts, from: to, to: from, ret: true, kind: 'vector', path: opp,
 					label: ev.error ? `⚠ ${oneLine(ev.error, 40)}`

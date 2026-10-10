@@ -135,8 +135,9 @@ How the starter hooks in:
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.
 - Tool executions are reported from Spring AI's tool-calling observations. The demos don't include Boot's
-  observation support, so `common` provides an `ObservationRegistry` when none exists (otherwise it attaches to
-  the existing one).
+  observation support, so the starter provides an `ObservationRegistry` when none exists (otherwise it attaches
+  to the existing one). That also switches on Spring AI's own chat, vector store and advisor observations,
+  which the starter uses to link calls, tool runs and HTTP round-trips to each other.
 - If the inspector is not running, the application behaves exactly as before.
 
 Settings, for the instrumented applications:
@@ -231,6 +232,7 @@ node --test spring-ai-inspector/spring-ai-inspector-server/src/test/js/*.test.mj
   Responses API (`/v1/responses`, also from OpenAI-compatible providers) and Ollama (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
 - Other endpoints that go through the proxy, such as embeddings, are captured but shown as raw JSON only.
 - A `ChatClient` built with `ChatClient.builder(chatModel)` instead of the injected builder gets no advisor
-  events, but its wire traffic is still captured.
+  events, but its wire traffic is still captured. It also has no observations, so tool runs and searches made
+  inside it are attributed by timing rather than by the call that made them.
 - Events are kept in memory and are lost when the inspector restarts. **Clear** resets the view between talk sections;
   use **Export** / `spring.ai.inspector.preload-dir` to keep runs.

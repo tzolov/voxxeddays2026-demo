@@ -1002,3 +1002,20 @@ test('a re-announced run keeps its start time and does not steal the selection',
 	assert.equal(state.runs.get('a').started, 1000);
 	assert.equal(state.selected, 'b');
 });
+
+test('a vector store delete is shown as an operation of its own, with its ids or filter', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'd', app: 'deletes', ts: 1 });
+	handle({ type: 'client-request', runId: 'd', callId: 'c1', seq: 1, ts: 2, messages: [{ role: 'user', text: 'clear' }] });
+	handle({ type: 'vector-start', runId: 'd', opId: 'o1', op: 'delete', clientCallId: 'c1', store: 'SimpleVectorStore', count: 3, seq: 2, ts: 3 });
+	let html = renderCall(state.runs.get('d').calls.get('c1'), true);
+	assert.match(html, /delete 3 ids/);
+	assert.match(html, /deleting…/);
+	handle({ type: 'vector-delete', runId: 'd', opId: 'o1', clientCallId: 'c1', store: 'SimpleVectorStore', count: 3, durationMs: 4, seq: 3, ts: 7 });
+	html = renderCall(state.runs.get('d').calls.get('c1'), true);
+	assert.match(html, /removed/);
+	assert.doesNotMatch(html, /No embedding round-trips/);
+	handle({ type: 'vector-start', runId: 'd', opId: 'o2', op: 'delete', clientCallId: 'c1', store: 'SimpleVectorStore', filter: "source == 'old'", seq: 4, ts: 8 });
+	assert.match(renderCall(state.runs.get('d').calls.get('c1'), true), /delete by filter source == &#39;old&#39;/);
+	assert.match(renderSequence(state.runs.get('d'), false), /delete by filter/);
+});

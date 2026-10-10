@@ -11,14 +11,16 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
 
 /**
  * Snapshots what the memory stores of a ChatClient call hold, so the inspector can show
- * memory being written, not only read back into the prompt. Stores are found on the
- * advisors of the chain:
+ * memory being written, not only read back into the prompt. Each snapshot reads the stores
+ * (two per call, on the caller's thread): cheap in memory, a round-trip each with a
+ * database-backed store; {@code spring.ai.inspector.memory-snapshots=false} turns them off.
+ * Stores are found on the advisors of the chain:
  * <ul>
  * <li>{@code chat-memory}: any {@link ChatMemory} field (e.g. MessageChatMemoryAdvisor)</li>
  * <li>{@code session}: a spring-ai-session {@code SessionService} field
@@ -41,13 +43,13 @@ class InspectorMemoryReader {
 		this.memoryDirs = memoryDirs;
 	}
 
-	List<Map<String, Object>> snapshot(List<CallAdvisor> advisors, Map<String, Object> context) {
+	List<Map<String, Object>> snapshot(List<? extends Advisor> advisors, Map<String, Object> context) {
 		List<Map<String, Object>> stores = new ArrayList<>();
 		Object id = context.get(CONVERSATION_ID);
 		String conversationId = id == null ? "default" : String.valueOf(id);
 		Set<Object> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
-		for (CallAdvisor advisor : advisors) {
+		for (Advisor advisor : advisors) {
 			if (advisor instanceof InspectorAdvisor) {
 				continue;
 			}
@@ -79,20 +81,20 @@ class InspectorMemoryReader {
 		return stores;
 	}
 
-	private Map<String, Object> chatMemory(CallAdvisor advisor, ChatMemory memory, String conversationId) {
+	private Map<String, Object> chatMemory(Advisor advisor, ChatMemory memory, String conversationId) {
 		Map<String, Object> store = store("chat-memory", advisor.getName(), conversationId);
 		store.put("memory", memory.getClass().getSimpleName());
 		store.put("items", memory.get(conversationId).stream().map(InspectorAdvisor::message).toList());
 		return store;
 	}
 
-	private Map<String, Object> session(CallAdvisor advisor, Object service, String sessionId) throws Exception {
+	private Map<String, Object> session(Advisor advisor, Object service, String sessionId) throws Exception {
 		Object events;
 		try {
 			events = service.getClass().getMethod("getEvents", String.class).invoke(service, sessionId);
 		}
 		catch (java.lang.reflect.InvocationTargetException ex) {
-			return null; // e.g. the session doesn't exist yet
+			return null; // a service that rejects the id; an unknown session returns an empty list
 		}
 		Map<String, Object> store = store("session", advisor.getName(), sessionId);
 		store.put("memory", service.getClass().getSimpleName());

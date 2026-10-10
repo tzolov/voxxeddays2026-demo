@@ -232,6 +232,44 @@ class InspectorEnvironmentPostProcessorTest {
 	}
 
 	@Test
+	void aGatewayWhoseUrlMentionsTheDefaultHostIsNotTheDefault() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.openai.base-url", "https://gateway.example/api.openai.com/",
+				"spring.ai.ollama.base-url", "http://LOCALHOST:11434/",
+				"spring.ai.deepseek.base-url", "not a url"));
+
+		assertThat(env.getProperty("spring.ai.openai.base-url")).isEqualTo("https://gateway.example/api.openai.com/");
+		assertThat(env.getProperty("spring.ai.ollama.base-url")).startsWith(url + "/r/"); // the default, any case or slash
+		assertThat(env.getProperty("spring.ai.deepseek.base-url")).isEqualTo("not a url");
+	}
+
+	@Test
+	void anUnresolvablePlaceholderNeverStopsTheApplication() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.anthropic.base-url", "${ANTHROPIC_GATEWAY}", "spring.ai.openai.base-url", "${OPENAI_GATEWAY}"));
+
+		// Anthropic is always routed: the proxy forwards to the default, Boot reports the placeholder itself.
+		assertThat(env.getProperty("spring.ai.inspector.upstream.anthropic")).isEqualTo("https://api.anthropic.com");
+		assertThat(env.getProperty("spring.ai.inspector.active")).isEqualTo("true");
+	}
+
+	@Test
+	void turnsOnReactorContextPropagationUnlessTheAppDecided() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		assertThat(environment(Map.of("spring.ai.inspector.url", url)).getProperty("spring.reactor.context-propagation"))
+			.isEqualTo("auto");
+		assertThat(environment(Map.of("spring.ai.inspector.url", url, "spring.reactor.context-propagation", "limited"))
+			.getProperty("spring.reactor.context-propagation")).isEqualTo("limited");
+		assertThat(environment(Map.of("spring.ai.inspector.url", url, "spring.ai.inspector.reactor-context-propagation", "false"))
+			.getProperty("spring.reactor.context-propagation")).isNull();
+	}
+
+	@Test
 	void canBeDisabled() throws IOException {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 

@@ -66,7 +66,11 @@ classDiagram
         -phase : Phase
         +adviseCall(request, chain)
         +adviseStream(request, chain)
-        currentCallId()$ String
+    }
+    class InspectorCorrelation {
+        find(observation, key)$ String
+        parentOf(observation)$ Parent
+        headers(observation)$ Map
     }
     class InspectorToolObservationHandler {
         +onStart(ToolCallingObservationContext)
@@ -121,6 +125,8 @@ classDiagram
     InspectorMcpTransportPostProcessor ..> InspectorMcpClientTransport : wraps each transport in
     InspectorAdvisor --> InspectorMemoryReader
     InspectorAdvisor ..> InspectorRagDescriber
+    InspectorAdvisor ..> InspectorCorrelation
+    InspectorToolObservationHandler ..> InspectorCorrelation
     InspectorToolObservationHandler --> InspectorToolOrigins
     InspectorMcpClientTransport --> InspectorToolOrigins
     InspectorMcpToolNamePostProcessor --> InspectorToolOrigins
@@ -187,10 +193,10 @@ sequenceDiagram
 | Mechanism | Spring extension point | What it sees | Events |
 |---|---|---|---|
 | [Detection and routing](#1-detection-and-traffic-routing) | `EnvironmentPostProcessor` (`spring.factories`) | the inspector, the providers' base URLs, the configured models | `run-start`, `run-end` |
-| [Recording proxy](#2-the-recording-proxy) | rewritten `spring.ai.<provider>.base-url` | every HTTP request and response to a model provider | `wire-request`, `wire-response` (sent by the server) |
+| [Recording proxy](#2-the-recording-proxy) | rewritten `spring.ai.<provider>.base-url`, correlation headers via `RestClientCustomizer` / `WebClientCustomizer` / the SDKs' `*HttpClientBuilderCustomizer` | every HTTP request and response to a model provider | `wire-request`, `wire-response` (sent by the server) |
 | [Advisors](#3-chatclient-advisors) | `ChatClientBuilderCustomizer` | the prompt as written and as sent, answers, usage, advisor chain, RAG setup, memory | `client-*`, `model-*`, `memory-snapshot` |
 | [Tool observations](#4-tool-calling-observations) | Micrometer `ObservationHandler` | every tool execution, including MCP tools | `tool-start`, `tool-end` |
-| [Bean proxies](#5-aop-proxies-for-vector-stores-and-embedding-models) | `BeanPostProcessor` + Spring AOP `ProxyFactory` | vector store adds and searches, embedding calls | `vector-*`, `embedding-call` |
+| [Bean proxies](#5-aop-proxies-for-vector-stores-and-embedding-models) | `BeanPostProcessor` + Spring AOP `ProxyFactory` | vector store adds, deletes and searches, embedding calls | `vector-*`, `embedding-call` |
 | [MCP transport decorator](#6-mcp-client-transports) | `BeanPostProcessor` on the auto-configured transports | every JSON-RPC message, both directions | `mcp-message` |
 | [Read-only reflection](#7-read-only-reflection) | none, read from the advisors' fields | chat memory, session memory, RAG stages | part of `client-request`, `memory-snapshot` |
 
@@ -251,9 +257,11 @@ Requests to `/r/<runId>/<provider>/...` are forwarded to that run's upstream. Th
 and both directions are published as `wire-request` and `wire-response`, with API keys redacted. The run id in the
 path tells the server which app made the call.
 
-The server links each wire call to the ChatClient call and model call open for that run. This works because the
-advisors post their events **synchronously** (about 1 ms on localhost). The `model-request` event has reached the
-server before the model's HTTP request reaches the proxy.
+The server links each wire call to the ChatClient call and model call named by the request's
+`X-Inspector-Call` / `X-Inspector-Model-Call` headers (see [Correlation](#3-chatclient-advisors)). Without them it
+uses the calls open for that run, which works because the advisors post their events **synchronously** (about 1
+ms on localhost): the `model-request` event has reached the server before the model's HTTP request reaches the
+proxy. Synchronous posting also keeps the events in their real order in the UI.
 
 Models that make no HTTP calls, such as jinfer running in the JVM, and providers that aren't routed are still
 shown. Their round-trips come from the `MODEL` advisor's events instead.
@@ -278,19 +286,43 @@ request also lists the advisor chain with names and orders.
 Each response event carries the generations with their finish reasons and thinking blocks, the model, token usage
 (including cache reads and writes), the duration, and any error.
 
-**Correlation.** The `CLIENT` advisor gives each call an id:
+**Correlation.** The `CLIENT` advisor gives each call an id, and the calls, tool runs, searches and HTTP
+round-trips find each other by Micrometer observation parentage, not by thread:
 
-- The id goes into the advisor context (`inspector.callId`), so the `MODEL` advisor can name its parent.
-- The id is also pushed onto a thread-local stack. A `ChatClient` call made while another runs on the same thread,
-  such as a sub-agent called from a tool, records the outer call as its `parentId`. The calls form a tree.
-- Tool runs, vector store operations and embedding calls read the top of that stack (`currentCallId()`). That is how
-  they know which ChatClient call they belong to.
-- A running tool is kept on a thread-local stack too. A `ChatClient` call made by that tool, such as a sub-agent
-  started by a `Task` tool, records it as its `parentToolId`. The inspector shows the sub-agent inside the tool's
-  card. When the sub-agent runs on another thread, the inspector server infers the parent call and tool from timing.
+- Spring AI observes every ChatClient call, every advisor in its chain, every model call and every tool
+  execution, each nested in the one that caused it. The `CLIENT` advisor tags its own observation with the
+  call id (`inspector.callId`), the `MODEL` advisor tags its observation with the model call id
+  (`inspector.modelCallId`), and the tool handler tags a tool's observation with the tool run id
+  (`inspector.toolId`).
+- Tool runs, vector store operations, embedding calls and nested `ChatClient` calls (sub-agents) walk up the
+  parents of the current observation to the nearest tag. A sub-agent records the enclosing call as its
+  `parentId` and the tool that made it as `parentToolId`; a call made deeper (by the sub-agent's own model)
+  is nested in the sub-agent, not attributed to the outer tool.
+- The id also goes into the advisor context (`inspector.callId`), so the `MODEL` advisor names its parent
+  even without observations.
+- The model's HTTP requests carry `X-Inspector-Call` and `X-Inspector-Model-Call` headers, added by an
+  interceptor on each HTTP client family Spring AI uses (the Anthropic and OpenAI SDKs' OkHttp clients, via
+  their `*HttpClientBuilderCustomizer`; Boot's `RestClient.Builder` and `WebClient.Builder` for Ollama,
+  Mistral, DeepSeek and others). Only requests to the inspector's host and port get them, so a tool calling
+  some other service with one of Boot's clients never carries them. The proxy links the round-trip by them
+  and strips them; without them (an SDK streaming on its own threads) it falls back to the call open for the
+  run at that moment.
+- A `ChatClient` built with `ChatClient.builder(chatModel)` has no observations of its own
+  (`ObservationRegistry.NOOP`). Its calls are still reported if it has the advisors, and they nest under
+  the observed call or tool they are made from, but what runs inside them (its tools, searches) stays
+  unattributed, and the server then attributes by timing. A sub-agent started on another thread (the
+  `Task` tool's background mode) has no observation parent either; the server infers its parent from
+  timing.
 
-**Streaming.** `adviseStream` aggregates the `Flux` with `ChatClientMessageAggregator`. The completion and error
-callbacks run on Reactor threads, so they post with `sendAsync` and never block.
+**Streaming.** `adviseStream` reports the request when the stream is subscribed, from the observation the
+advisor chain puts into the Reactor context, and aggregates the `Flux` with `ChatClientMessageAggregator`.
+The tool loop of a streamed call runs on Reactor threads, where Spring AI parents each tool observation from
+that context, so tool runs are attributed like in a blocking call. For searches and embeddings made by
+stream advisors on other threads, the starter switches on Reactor's automatic context propagation, as Boot's
+Reactor auto-configuration does in a WebFlux app: it sets `spring.reactor.context-propagation=auto` unless
+the app set the property (or `spring.ai.inspector.reactor-context-propagation=false`), and enables the hook
+itself when the property says `auto`, since Spring MVC apps don't have that auto-configuration. The
+completion and error callbacks run on Reactor threads, so they post with `sendAsync` and never block.
 
 ### 4. Tool-calling observations
 
@@ -301,9 +333,11 @@ Spring AI wraps each tool execution in a Micrometer observation with a `ToolCall
 - Spring AI emits these observations only when an `ObservationRegistry` bean exists. If the app has none, the
   starter provides one (`@ConditionalOnMissingBean`). A static `BeanPostProcessor` registers the handler on
   whichever registry the app ends up with, its own or Actuator's.
-- Tools run on the thread of the ChatClient call that asked for them, so `currentCallId()` attributes them.
-- MCP tools are observed twice for one execution. The handler keys each execution by the model's tool-call id
-  and reports only the outermost start and stop.
+- A tool observation's parent is the ChatClient call that asked for it (Spring AI sets it, also in a streamed
+  call), which attributes the run; the handler tags the observation with the run id for sub-agents.
+- Spring AI starts one observation per tool execution. A `ToolCallingManager` wrapping the default one may
+  observe the same call again, so the handler keys each execution by the model's tool-call id and reports
+  only the outermost start and stop.
 - `tool-start` carries the name, type, description and arguments. For an MCP tool it also carries its origin:
   the connection, the server, its version and the original tool name (see [section 6](#6-mcp-client-transports)).
   `tool-end` carries the result (up to 20,000 characters), the duration and any error.
@@ -316,10 +350,10 @@ Each proxies the concrete class when it can, so injection points typed as the im
 
 **`InspectorVectorStorePostProcessor`** wraps every `VectorStore` bean:
 
-- It intercepts `add`, and the `DocumentWriter` methods `accept` and `write`. It also intercepts
-  `similaritySearch(SearchRequest)` and `similaritySearch(String)`.
-- It reports each operation **when it starts** (`vector-start`) and **when it ends** (`vector-add` or
-  `vector-search`). The inspector can then draw the embedding calls the store makes meanwhile *inside* the
+- It intercepts `add`, and the `DocumentWriter` methods `accept` and `write`, both `delete` methods (by ids,
+  by filter), and `similaritySearch(SearchRequest)` and `similaritySearch(String)`.
+- It reports each operation **when it starts** (`vector-start`) and **when it ends** (`vector-add`,
+  `vector-delete` or `vector-search`). The inspector can then draw the embedding calls the store makes meanwhile *inside* the
   operation.
 - Searches carry the query, `topK`, threshold, filter and scored results. Adds carry the count and a sample.
 - A default method calling another method on the same object bypasses the proxy (self-invocation). So
@@ -414,7 +448,9 @@ Some things have no hook. The starter reads them from the fields of the advisors
 compile-time dependencies on the libraries that define them. Every failure is swallowed.
 
 - **Memory** (`InspectorMemoryReader`): the `CLIENT` advisor sends a `memory-snapshot` before and after each
-  call. The snapshot holds:
+  call. Each snapshot reads the stores on the caller's thread: free with in-memory stores, a database
+  round-trip each with JDBC-backed ones; `spring.ai.inspector.memory-snapshots=false` turns them off. The
+  snapshot holds:
   - any `ChatMemory` field, e.g. `MessageChatMemoryAdvisor`, for the call's conversation id;
   - any spring-ai-session `SessionService` field, including archived (compacted) events;
   - the files in `spring.ai.inspector.memory-dirs`.
@@ -576,6 +612,8 @@ Google GenAI and Bedrock (Converse) are not proxied. Those apps still show their
 | `spring.ai.inspector.route.openai` | | `always` routes a non-default OpenAI base URL ending in `/v1` |
 | `spring.ai.inspector.proxy.<name>` | | base-url properties of another provider to route, comma-separated |
 | `spring.ai.inspector.token` | | the inspector's `spring.ai.inspector.token`, when it has one; sent with every event |
+| `spring.ai.inspector.memory-snapshots` | `true` | `false` skips the memory snapshots (two store reads per call) |
+| `spring.ai.inspector.reactor-context-propagation` | `true` | sets `spring.reactor.context-propagation=auto` when the app didn't set it (and enables Reactor's hook for it), so streamed calls stay attributed on Reactor threads |
 
 The starter sets `spring.ai.inspector.active`, `run-id`, `app`, `models`, `routed` and `upstream.<provider>` for
 itself. Don't set them by hand.

@@ -1,23 +1,24 @@
 package org.springaicommunity.inspector;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import io.micrometer.observation.Observation;
 import reactor.core.publisher.Flux;
 
 import org.springframework.ai.chat.client.ChatClientMessageAggregator;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationContext;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -38,6 +39,13 @@ import org.springframework.core.Ordered;
  * every other advisor (memory, RAG, guardrails, ...) has had its say.</li>
  * </ul>
  * Comparing the two is what lets the inspector show what the advisors added.
+ *
+ * <p>Calls are correlated by observation parentage (see {@link InspectorCorrelation}): the
+ * CLIENT advisor tags its observation with the call's id, the MODEL advisor with the model
+ * call's id. Tool runs, vector store operations, embedding calls, the model's HTTP
+ * requests and nested ChatClient calls (sub-agents) find those tags up their own
+ * observation's parents, on whatever thread they run, so a streamed call is attributed like
+ * a blocking one.
  */
 public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 
@@ -47,7 +55,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 
 	}
 
-	static final String CALL_ID = "inspector.callId";
+	static final String CALL_ID = InspectorCorrelation.CALL_ID;
 
 	/**
 	 * Advisor context keys whose values are never reported: the context is the app's own
@@ -56,47 +64,21 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	static final Pattern SECRET_KEY = Pattern
 		.compile("(?i)api[-_ ]?key|secret|password|passwd|credential|authorization|access[-_ ]?token|auth[-_ ]?token|bearer");
 
-	/** Open CLIENT calls on this thread, so nested ChatClient calls (sub-agents) form a tree. */
-	private static final ThreadLocal<Deque<String>> OPEN_CALLS = ThreadLocal.withInitial(ArrayDeque::new);
-
-	/**
-	 * Tool runs in progress on this thread, innermost first, with the call that ran each, so a
-	 * ChatClient call made by a tool (a sub-agent) names the tool that started it.
-	 */
-	private static final ThreadLocal<Deque<ToolRun>> OPEN_TOOLS = ThreadLocal
-		.withInitial(java.util.concurrent.ConcurrentLinkedDeque::new);
-
-	record ToolRun(String toolId, String clientCallId) {
-	}
-
 	private final InspectorClient client;
 
 	private final Phase phase;
 
 	private final InspectorMemoryReader memoryReader;
 
-	/** The innermost ChatClient call running on this thread, if any. */
-	static String currentCallId() {
-		return OPEN_CALLS.get().peek();
-	}
-
 	/**
-	 * A tool run starting on this thread. Returns the thread's open tool runs, from which the
-	 * run is removed when it ends, even if its end is observed on another thread.
+	 * The observation Spring AI opened around this very advisor, or null: only that one is
+	 * tagged. Whatever else may be current (a ChatClient without a registry called inside an
+	 * HTTP request's or a tool's observation) is still walked for the parent, never tagged,
+	 * or every later call would nest under this one.
 	 */
-	static Deque<ToolRun> toolStarted(String toolId) {
-		Deque<ToolRun> open = OPEN_TOOLS.get();
-		open.push(new ToolRun(toolId, currentCallId()));
-		return open;
-	}
-
-	/**
-	 * The tool run that a call made now with this parent was started by: the innermost tool
-	 * running on this thread, if the parent call ran it (not some outer call's tool).
-	 */
-	static String parentToolId(String parentId) {
-		ToolRun tool = parentId == null ? null : OPEN_TOOLS.get().peek();
-		return tool != null && parentId.equals(tool.clientCallId()) ? tool.toolId() : null;
+	private Observation own(Observation observation) {
+		return observation != null && observation.getContext() instanceof AdvisorObservationContext context
+				&& getName().equals(context.getAdvisorName()) ? observation : null;
 	}
 
 	public InspectorAdvisor(InspectorClient client, Phase phase) {
@@ -122,31 +104,23 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	@Override
 	public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
 		String callId = newId();
-		Deque<String> open = OPEN_CALLS.get();
+		// The observation current here: this advisor's own when the ChatClient is observed, which
+		// is then tagged with the call's id so everything that runs inside finds it.
+		Observation observation = InspectorCorrelation.current();
 
 		// Every event is built lazily inside InspectorClient's guard: a failure while
 		// describing the call drops the event, never the application's call.
 		if (this.phase == Phase.CLIENT) {
 			request = request.mutate().context(CALL_ID, callId).build();
 			ChatClientRequest clientRequest = request;
-			String parentId = open.peek();
-			String parentToolId = parentToolId(parentId);
-			this.client.send("client-request", () -> {
-				Map<String, Object> event = requestEvent(callId, parentId, clientRequest, advisorNames(chain));
-				if (parentToolId != null) {
-					event.put("parentToolId", parentToolId);
-				}
-				List<Map<String, Object>> rag = InspectorRagDescriber.describe(chain.getCallAdvisors());
-				if (!rag.isEmpty()) {
-					event.put("rag", rag);
-				}
-				return event;
-			});
-			sendMemorySnapshot(callId, "before", chain, request);
-			open.push(callId);
+			InspectorCorrelation.Parent parent = InspectorCorrelation.parentOf(observation);
+			InspectorCorrelation.tag(own(observation), CALL_ID, callId);
+			this.client.send("client-request", () -> clientRequestEvent(callId, parent, clientRequest, chain.getCallAdvisors()));
+			sendMemorySnapshot(callId, "before", chain.getCallAdvisors(), request.context(), false);
 		}
 		else {
 			ChatClientRequest modelRequest = request;
+			InspectorCorrelation.tag(own(observation), InspectorCorrelation.MODEL_CALL_ID, callId);
 			this.client.send("model-request",
 					() -> requestEvent(callId, (String) modelRequest.context().get(CALL_ID), modelRequest, null));
 		}
@@ -155,7 +129,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		try {
 			ChatClientResponse response = chain.nextCall(request);
 			if (this.phase == Phase.CLIENT) {
-				sendMemorySnapshot(callId, "after", chain, request);
+				sendMemorySnapshot(callId, "after", chain.getCallAdvisors(), request.context(), false);
 			}
 			long durationMs = System.currentTimeMillis() - start;
 			this.client.send(responseType(), () -> responseEvent(callId, response, durationMs));
@@ -166,48 +140,79 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			this.client.send(responseType(), () -> errorEvent(callId, ex, durationMs));
 			throw ex;
 		}
-		finally {
-			if (this.phase == Phase.CLIENT) {
-				open.remove(callId);
-				// A tool whose end was never observed must not name later calls' sub-agents.
-				OPEN_TOOLS.get().removeIf(t -> callId.equals(t.clientCallId()));
-			}
-		}
 	}
 
 	@Override
 	public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
 		String callId = newId();
-		if (this.phase == Phase.CLIENT) {
-			request = request.mutate().context(CALL_ID, callId).build();
-		}
-		ChatClientRequest streamRequest = request;
-		this.client.send(this.phase == Phase.CLIENT ? "client-request" : "model-request",
-				() -> requestEvent(callId,
-						this.phase == Phase.CLIENT ? null : (String) streamRequest.context().get(CALL_ID),
-						streamRequest, this.phase == Phase.CLIENT ? advisorNames(chain) : null));
-		long start = System.currentTimeMillis();
-		// The completion and error callbacks may run on Reactor threads: post without blocking.
-		return new ChatClientMessageAggregator()
-			.aggregateChatClientResponse(chain.nextStream(request),
-					response -> this.client.sendAsync(responseType(),
-							() -> responseEvent(callId, response, System.currentTimeMillis() - start)))
-			.doOnError(ex -> this.client.sendAsync(responseType(), () -> errorEvent(callId,
-					ex instanceof RuntimeException rex ? rex : new RuntimeException(ex), System.currentTimeMillis() - start)));
+		ChatClientRequest streamRequest = this.phase == Phase.CLIENT ? request.mutate().context(CALL_ID, callId).build()
+				: request;
+		// The advisor chain puts this advisor's observation into the Reactor context; the
+		// request is reported at subscription, when that context is known.
+		return Flux.deferContextual(context -> {
+			Observation observation = InspectorCorrelation.fromContext(context);
+			if (this.phase == Phase.CLIENT) {
+				InspectorCorrelation.Parent parent = InspectorCorrelation.parentOf(observation);
+				InspectorCorrelation.tag(own(observation), CALL_ID, callId);
+				this.client.send("client-request",
+						() -> clientRequestEvent(callId, parent, streamRequest, chain.getStreamAdvisors()));
+				sendMemorySnapshot(callId, "before", chain.getStreamAdvisors(), streamRequest.context(), false);
+			}
+			else {
+				InspectorCorrelation.tag(own(observation), InspectorCorrelation.MODEL_CALL_ID, callId);
+				this.client.send("model-request",
+						() -> requestEvent(callId, (String) streamRequest.context().get(CALL_ID), streamRequest, null));
+			}
+			long start = System.currentTimeMillis();
+			// The completion and error callbacks may run on Reactor threads: post without blocking.
+			return new ChatClientMessageAggregator()
+				.aggregateChatClientResponse(chain.nextStream(streamRequest), response -> {
+					if (this.phase == Phase.CLIENT) {
+						sendMemorySnapshot(callId, "after", chain.getStreamAdvisors(), streamRequest.context(), true);
+					}
+					this.client.sendAsync(responseType(), () -> responseEvent(callId, response, System.currentTimeMillis() - start));
+				})
+				.doOnError(ex -> this.client.sendAsync(responseType(), () -> errorEvent(callId,
+						ex instanceof RuntimeException rex ? rex : new RuntimeException(ex), System.currentTimeMillis() - start)));
+		});
 	}
 
-	private void sendMemorySnapshot(String callId, String phase, CallAdvisorChain chain, ChatClientRequest request) {
+	/** The CLIENT request: with its parent call and tool, the advisor chain and the RAG setup. */
+	private static Map<String, Object> clientRequestEvent(String callId, InspectorCorrelation.Parent parent,
+			ChatClientRequest request, List<? extends Advisor> advisors) {
+		Map<String, Object> event = requestEvent(callId, parent.callId(), request, advisorNames(advisors));
+		if (parent.toolId() != null) {
+			event.put("parentToolId", parent.toolId());
+		}
+		List<Map<String, Object>> rag = InspectorRagDescriber.describe(advisors);
+		if (!rag.isEmpty()) {
+			event.put("rag", rag);
+		}
+		return event;
+	}
+
+	/**
+	 * What the memory stores hold now; {@code async} posts from the background thread (the
+	 * snapshot itself is still read here), for callbacks on Reactor threads.
+	 */
+	private void sendMemorySnapshot(String callId, String phase, List<? extends Advisor> advisors,
+			Map<String, Object> context, boolean async) {
 		if (this.memoryReader == null) {
 			return;
 		}
 		try {
-			List<Map<String, Object>> stores = this.memoryReader.snapshot(chain.getCallAdvisors(), request.context());
+			List<Map<String, Object>> stores = this.memoryReader.snapshot(advisors, context);
 			if (!stores.isEmpty()) {
 				Map<String, Object> event = new LinkedHashMap<>();
 				event.put("clientCallId", callId);
 				event.put("phase", phase);
 				event.put("stores", stores);
-				this.client.send("memory-snapshot", () -> event);
+				if (async) {
+					this.client.sendAsync("memory-snapshot", () -> event);
+				}
+				else {
+					this.client.send("memory-snapshot", () -> event);
+				}
 			}
 		}
 		catch (RuntimeException | LinkageError ex) {
@@ -223,15 +228,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		return UUID.randomUUID().toString().substring(0, 8);
 	}
 
-	private static List<Map<String, Object>> advisorNames(CallAdvisorChain chain) {
-		return advisorNames(chain.getCallAdvisors());
-	}
-
-	private static List<Map<String, Object>> advisorNames(StreamAdvisorChain chain) {
-		return advisorNames(chain.getStreamAdvisors());
-	}
-
-	private static List<Map<String, Object>> advisorNames(List<? extends org.springframework.ai.chat.client.advisor.api.Advisor> chain) {
+	private static List<Map<String, Object>> advisorNames(List<? extends Advisor> chain) {
 		List<Map<String, Object>> advisors = new ArrayList<>();
 		for (var advisor : chain) {
 			if (advisor instanceof InspectorAdvisor) {

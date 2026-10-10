@@ -11,18 +11,22 @@ import org.springframework.ai.tool.observation.ToolCallingObservationContext;
 
 /**
  * Reports every tool execution (including MCP tools) to the Spring AI Inspector, using the
- * observation Spring AI already emits around each tool call. Tool calls run on the
- * thread of the ChatClient call that requested them, so they are attributed to the
- * innermost open {@link InspectorAdvisor} call. A ChatClient call the tool makes meanwhile
- * (a sub-agent) names the tool run as its {@code parentToolId}.
+ * observation Spring AI already emits around each tool call. The tool observation's parent
+ * is the ChatClient call that requested it (Spring AI sets it explicitly, also for
+ * streamed calls whose tools run on other threads), which names the call the run belongs
+ * to; the observation is tagged with the run's id, so a ChatClient call the tool makes
+ * meanwhile (a sub-agent) finds it as its {@code parentToolId} (see
+ * {@link InspectorCorrelation}).
  */
 public class InspectorToolObservationHandler implements ObservationHandler<ToolCallingObservationContext> {
 
 	/**
-	 * Some tools (e.g. MCP tools) are observed twice for one call. Key each execution by
-	 * the model's tool-call id and report only the outermost start/stop.
+	 * One execution may be observed more than once with the same tool-call id, e.g. by a
+	 * {@code ToolCallingManager} that wraps the default one and observes again. Spring AI
+	 * itself starts exactly one observation per execution. Each execution is keyed by the
+	 * model's tool-call id and only the outermost start and stop are reported.
 	 */
-	private final java.util.Map<Object, Active> active = new java.util.concurrent.ConcurrentHashMap<>();
+	private final Map<Object, Active> active = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static final class Active {
 
@@ -31,9 +35,6 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 		final long start = System.currentTimeMillis();
 
 		int depth;
-
-		/** The open tool runs of the thread it started on (see InspectorAdvisor#toolStarted). */
-		java.util.Deque<InspectorAdvisor.ToolRun> thread;
 
 		Active(String toolId) {
 			this.toolId = toolId;
@@ -65,11 +66,14 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 			if (execution.depth++ > 0) {
 				return; // the same tool call, observed again
 			}
-			// Inside the lock, so onStop sees it even when the end is observed on another thread.
-			execution.thread = InspectorAdvisor.toolStarted(execution.toolId); // a sub-agent it calls names it
 		}
 		String toolId = execution.toolId;
-		String clientCallId = InspectorAdvisor.currentCallId();
+		context.put(InspectorCorrelation.TOOL_ID, toolId); // a sub-agent it calls names it
+		String clientCallId = InspectorCorrelation.find(context.getParentObservation(), InspectorCorrelation.CALL_ID);
+		if (clientCallId == null) {
+			clientCallId = InspectorCorrelation.currentCallId();
+		}
+		String callId = clientCallId;
 		String thread = Thread.currentThread().getName();
 		// Where the tool comes from, e.g. the MCP connection and server of an MCP tool.
 		Map<String, Object> mcp = this.origins.get(context.getToolDefinition().name(),
@@ -80,7 +84,7 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 		this.client.send("tool-start", () -> {
 			Map<String, Object> event = new LinkedHashMap<>();
 			event.put("toolId", toolId);
-			event.put("clientCallId", clientCallId);
+			event.put("clientCallId", callId);
 			event.put("toolCallId", context.getToolCallId());
 			event.put("name", context.getToolDefinition().name());
 			event.put("toolType", context.getToolType());
@@ -107,9 +111,6 @@ public class InspectorToolObservationHandler implements ObservationHandler<ToolC
 			}
 		}
 		this.active.remove(key);
-		if (execution.thread != null) {
-			execution.thread.removeIf(t -> t.toolId().equals(execution.toolId));
-		}
 		this.origins.stopped(execution.toolId);
 		long durationMs = System.currentTimeMillis() - execution.start;
 		this.client.send("tool-end", () -> {

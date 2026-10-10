@@ -141,7 +141,7 @@ export function renderItems(all, latest, ctx = {}) {
 /** What of a tool's own work is still running, e.g. "⤓ ingesting…", for its collapsed card's summary line. */
 function runningInside(entries) {
 	return entries.filter((e) => e.kind === 'vop' && e.ref.ev.pending)
-		.map((e) => `<span class="pill">${e.ref.search ? '🔎 searching…' : '⤓ ingesting…'}</span>`).join('');
+		.map((e) => `<span class="pill">${e.ref.search ? '🔎 searching…' : e.ref.ev.op === 'delete' ? '✕ deleting…' : '⤓ ingesting…'}</span>`).join('');
 }
 
 /** Renders entries in order, folding runs of 3+ systemOne checks or embedding calls to one model. */
@@ -169,12 +169,16 @@ function renderInOrder(items, latest, render) {
 function renderVectorOp(op, ctx) {
 	const ev = op.ev;
 	const key = opKey(ev);
+	const deleting = ev.op === 'delete' || ev.type === 'vector-delete';
 	const status = op.search ? searchStatus(ev)
-		: ev.pending ? '<span class="spinner"></span><span class="right-meta">ingesting…</span>'
+		: ev.pending ? `<span class="spinner"></span><span class="right-meta">${deleting ? 'deleting…' : 'ingesting…'}</span>`
 		: ev.error ? `<span class="pill err" title="${esc(ev.error)}">${esc(oneLine(ev.error, 60))}</span>`
-		: `<span class="pill">${fmtNum(ev.count)} stored</span>`;
-	const summary = `<span class="chev">▸</span><span class="num">${op.search ? '🔎' : '⤓'}</span><span class="pill">${esc(ev.store)}</span>
-		${op.search ? `<span class="fn">“${esc(oneLine(ev.query, 80))}”</span>` : `<span class="fn">add ${fmtNum(ev.count)} chunk${ev.count === 1 ? '' : 's'}</span>`}
+		: deleting ? '<span class="pill">removed</span>' : `<span class="pill">${fmtNum(ev.count)} stored</span>`;
+	const what = op.search ? `<span class="fn">“${esc(oneLine(ev.query, 80))}”</span>`
+		: deleting ? `<span class="fn">delete ${ev.filter ? 'by filter ' + esc(oneLine(ev.filter, 60)) : `${fmtNum(ev.count)} id${ev.count === 1 ? '' : 's'}`}</span>`
+		: `<span class="fn">add ${fmtNum(ev.count)} chunk${ev.count === 1 ? '' : 's'}</span>`;
+	const summary = `<span class="chev">▸</span><span class="num">${op.search ? '🔎' : deleting ? '✕' : '⤓'}</span><span class="pill">${esc(ev.store)}</span>
+		${what}
 		<span class="arrow">→</span>${status}${ev.pending ? '' : `<span class="right-meta">${fmtMs(ev.durationMs)}</span>`}`;
 	const nested = op.wires.length ? renderItems(op.wires.map((w) => ({ kind: 'wire', ref: w })), null) : '';
 	// The hits, one line: each opens the search in the Retrieval step, where the documents are.
@@ -186,8 +190,8 @@ function renderVectorOp(op, ctx) {
 	const sources = !op.search ? [...new Set((ev.sample || []).map((d) => d.metadata?.file_name || d.metadata?.source).filter(Boolean))] : [];
 	const from = sources.length ? `<div class="hits-line"><span class="col-title">from</span><span class="fn">${sources.map(esc).join(', ')}</span></div>` : '';
 	const error = ev.error ? `<div class="notice err">${esc(ev.error)}</div>` : '';
-	// Whether embeddings were recorded, whatever the search returned.
-	const empty = !nested && !ev.pending && !ev.error
+	// Whether embeddings were recorded, whatever the search returned (a delete makes none).
+	const empty = !nested && !ev.pending && !ev.error && !deleting
 		? '<div class="notice info">No embedding round-trips recorded during it (e.g. embeddings reused, computed elsewhere or not routed).</div>' : '';
 	return `<details class="wire vector-op" data-key="${esc(key)}" ${isOpen(key, false) ? 'open' : ''}><summary>${summary}</summary>
 		<div class="pane on">${error}${nested}${hits}${from}${empty}</div></details>`;

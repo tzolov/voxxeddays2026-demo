@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
 
 /**
  * Describes the RAG advisors of a chain (their configured stages) by reading their
@@ -21,9 +21,9 @@ final class InspectorRagDescriber {
 	private InspectorRagDescriber() {
 	}
 
-	static List<Map<String, Object>> describe(List<CallAdvisor> advisors) {
+	static List<Map<String, Object>> describe(List<? extends Advisor> advisors) {
 		List<Map<String, Object>> rag = new ArrayList<>();
-		for (CallAdvisor advisor : advisors) {
+		for (Advisor advisor : advisors) {
 			try {
 				String type = advisor.getClass().getName();
 				if (MODULAR.equals(type)) {
@@ -40,7 +40,7 @@ final class InspectorRagDescriber {
 		return rag;
 	}
 
-	private static Map<String, Object> modular(CallAdvisor advisor) {
+	private static Map<String, Object> modular(Advisor advisor) {
 		Map<String, Object> d = new LinkedHashMap<>();
 		d.put("advisor", advisor.getName());
 		d.put("kind", "modular");
@@ -59,7 +59,7 @@ final class InspectorRagDescriber {
 		return d;
 	}
 
-	private static Map<String, Object> questionAnswer(CallAdvisor advisor) {
+	private static Map<String, Object> questionAnswer(Advisor advisor) {
 		Map<String, Object> d = new LinkedHashMap<>();
 		d.put("advisor", advisor.getName());
 		d.put("kind", "question-answer");

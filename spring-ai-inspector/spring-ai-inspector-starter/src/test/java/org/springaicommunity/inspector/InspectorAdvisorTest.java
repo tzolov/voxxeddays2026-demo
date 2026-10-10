@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 import org.springaicommunity.inspector.InspectorAdvisor.Phase;
 
@@ -26,15 +28,26 @@ class InspectorAdvisorTest {
 
 	private final AtomicReference<String> callIdSeenByModel = new AtomicReference<>();
 
+	/** Like the auto-configured ChatClient: observed (a registry needs a handler to be real), so the calls form a tree. */
+	private final ObservationRegistry registry = ObservationRegistry.create();
+
+	InspectorAdvisorTest() {
+		this.registry.observationConfig().observationHandler(context -> true);
+	}
+
 	private final ChatModel model = prompt -> {
-		this.callIdSeenByModel.set(InspectorAdvisor.currentCallId());
+		this.callIdSeenByModel.set(InspectorCorrelation.currentCallId());
 		return new ChatResponse(List.of(new Generation(new AssistantMessage("hello"))));
 	};
 
 	private ChatClient chatClient() {
-		return ChatClient.builder(this.model)
+		return observed(this.model)
 			.defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT), new InspectorAdvisor(this.client, Phase.MODEL))
 			.build();
+	}
+
+	private ChatClient.Builder observed(ChatModel model) {
+		return ChatClient.builder(model, this.registry, null, null);
 	}
 
 	@Test
@@ -70,7 +83,7 @@ class InspectorAdvisorTest {
 		ChatModel thinking = prompt -> new ChatResponse(List.of(
 				new Generation(AssistantMessage.builder().content("").properties(Map.of("signature", "sig")).build()),
 				new Generation(new AssistantMessage("hello"))));
-		ChatClient.builder(thinking)
+		observed(thinking)
 			.defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT))
 			.build()
 			.prompt("hi")
@@ -87,41 +100,81 @@ class InspectorAdvisorTest {
 		chatClient().prompt("hi").call().content();
 
 		assertThat(this.callIdSeenByModel.get()).isEqualTo(this.events.get(0).get("callId"));
-		assertThat(InspectorAdvisor.currentCallId()).isNull();
+		assertThat(InspectorCorrelation.currentCallId()).isNull();
 	}
 
 	@Test
 	void aCallNestedDeeperThanAToolIsNotAttributedToIt() {
 		// A tool of the outer call runs a sub-agent, whose own model calls one more ChatClient (not a tool).
 		ChatClient innermost = chatClient();
-		ChatClient subAgent = ChatClient.builder((ChatModel) prompt -> {
+		ChatClient subAgent = observed(prompt -> {
 			innermost.prompt("rewrite").call().content();
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("sub"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build();
-		ChatClient.builder((ChatModel) prompt -> {
-			var open = InspectorAdvisor.toolStarted("task-1");
-			try {
+		observed(prompt -> {
+			// As Spring AI's tool loop does: a tool observation, nested in the call, tagged by the handler.
+			Observation tool = Observation.createNotStarted("tool", this.registry).start();
+			tool.getContext().put(InspectorCorrelation.TOOL_ID, "task-1");
+			try (Observation.Scope scope = tool.openScope()) {
 				subAgent.prompt("sub-task").call().content();
 			}
 			finally {
-				open.removeIf(t -> t.toolId().equals("task-1"));
+				tool.stop();
 			}
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
 
 		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
 		assertThat(requests).extracting(r -> r.get("parentToolId")).containsExactly(null, "task-1", null);
+		assertThat(requests.get(1).get("parentId")).isEqualTo(requests.get(0).get("callId"));
 		assertThat(requests.get(2).get("parentId")).isEqualTo(requests.get(1).get("callId"));
 	}
 
 	@Test
-	void aToolWhoseEndWasNeverObservedIsForgottenWhenItsCallEnds() {
-		ChatClient.builder((ChatModel) prompt -> {
-			InspectorAdvisor.toolStarted("lost"); // e.g. an Error thrown before the observation stopped
+	void anUnobservedClientNestsUnderTheObservedCallAroundItWithoutTaggingIt() {
+		// A sub-agent built with ChatClient.builder(chatModel), called twice from an observed tool:
+		// both nest under the outer call and its tool, and neither nests under the other (the
+		// outer observations are walked, never tagged).
+		ChatClient unobserved = ChatClient.builder(this.model)
+			.defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT), new InspectorAdvisor(this.client, Phase.MODEL))
+			.build();
+		observed(prompt -> {
+			Observation tool = Observation.createNotStarted("tool", this.registry).start();
+			tool.getContext().put(InspectorCorrelation.TOOL_ID, "task-1");
+			try (Observation.Scope scope = tool.openScope()) {
+				unobserved.prompt("first").call().content();
+				unobserved.prompt("second").call().content();
+			}
+			finally {
+				tool.stop();
+			}
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
 
-		assertThat(InspectorAdvisor.parentToolId((String) this.events.get(0).get("callId"))).isNull();
+		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		assertThat(requests).hasSize(3);
+		assertThat(requests.get(1)).containsEntry("parentId", requests.get(0).get("callId")).containsEntry("parentToolId", "task-1");
+		assertThat(requests.get(2)).containsEntry("parentId", requests.get(0).get("callId")).containsEntry("parentToolId", "task-1");
+	}
+
+	@Test
+	void withoutObservationsCallsAreReportedButNotNested() {
+		// ChatClient.builder(chatModel) uses ObservationRegistry.NOOP: no tree, no attribution.
+		ChatClient inner = ChatClient.builder(this.model)
+			.defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT), new InspectorAdvisor(this.client, Phase.MODEL))
+			.build();
+		ChatClient.builder((ChatModel) prompt -> {
+			inner.prompt("nested").call().content();
+			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
+		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
+
+		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		assertThat(requests).hasSize(2);
+		assertThat(requests.get(1).get("parentId")).isNull();
+		assertThat(this.callIdSeenByModel.get()).isNull();
+		// The MODEL phase still finds its call through the advisor context.
+		Map<String, Object> modelRequest = this.events.stream().filter(e -> "model-request".equals(e.get("type"))).findFirst().orElseThrow();
+		assertThat(modelRequest.get("parentId")).isEqualTo(requests.get(1).get("callId"));
 	}
 
 	@Test

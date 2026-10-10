@@ -32,6 +32,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *
  * <p>Events are recorded under a lock but sent to browsers from a single dispatcher
  * thread, so a slow or stalled browser tab never delays the applications posting events.
+ * A new tab gets the history on a thread of its own and live events are queued for it
+ * meanwhile, so a tab catching up never delays the others. (A tab that stalls once live
+ * does hold the dispatcher for its send, as before.)
  *
  * <p>A run's upstreams are fixed by its first {@code run-start}: the proxy forwards the
  * run's API keys there, so a later event (from anyone able to reach the port) must not be
@@ -82,15 +85,75 @@ public class EventStore {
 	private record OpenTool(String toolId, String runId, Object clientCallId) {
 	}
 
-	/** A browser connection, and the last event it received (to skip duplicates). */
+	/** Replays the history to each new browser on a thread of its own, so other tabs stay live. */
+	private final ExecutorService catchUp = Executors.newCachedThreadPool(r -> {
+		Thread thread = new Thread(r, "inspector-sse-catch-up");
+		thread.setDaemon(true);
+		return thread;
+	});
+
+	/**
+	 * A browser connection. Until its history is replayed, live events are kept in
+	 * {@code backlog} (never waiting for the replay's sends) and go out right after it;
+	 * {@code lastSeq} drops what both had.
+	 */
 	private static final class Subscriber {
 
 		final SseEmitter emitter;
 
 		long lastSeq = -1;
 
+		/** Guarded by {@code backlog}: once true, events go straight to the emitter. */
+		boolean live;
+
+		final Deque<Map<String, Object>> backlog = new ArrayDeque<>();
+
 		Subscriber(SseEmitter emitter) {
 			this.emitter = emitter;
+		}
+
+		/** A live event: kept while the history is going out, sent otherwise. */
+		void deliver(Map<String, Object> event) throws IOException {
+			synchronized (this.backlog) {
+				if (!this.live) {
+					this.backlog.addLast(event);
+					return;
+				}
+			}
+			send(event);
+		}
+
+		/**
+		 * The history is through: what arrived meanwhile goes out in batches (the backlog is
+		 * only locked to take a batch, never while sending), then the events go straight through.
+		 */
+		void goLive() throws IOException {
+			while (true) {
+				List<Map<String, Object>> batch;
+				synchronized (this.backlog) {
+					if (this.backlog.isEmpty()) {
+						this.live = true;
+						return;
+					}
+					batch = new ArrayList<>(this.backlog);
+					this.backlog.clear();
+				}
+				for (Map<String, Object> event : batch) {
+					send(event);
+				}
+			}
+		}
+
+		/** Sends are sequential by construction (the history, the batches, then live events). */
+		synchronized void send(Map<String, Object> event) throws IOException {
+			Object seq = event.get("seq");
+			if (seq instanceof Long s) {
+				if (s <= this.lastSeq) {
+					return; // already sent as part of the replayed history
+				}
+				this.lastSeq = s;
+			}
+			this.emitter.send(SseEmitter.event().data(event, MediaType.APPLICATION_JSON));
 		}
 
 	}
@@ -155,9 +218,8 @@ public class EventStore {
 	}
 
 	/**
-	 * Replays the history to a new browser, then streams live events. Both happen on the
-	 * dispatcher thread, in order; {@link Subscriber#lastSeq} drops events that are both in
-	 * the replayed history and queued for broadcast.
+	 * Registers a new browser right away (so no live event is missed), replays the history
+	 * to it on a thread of its own, then lets the live events through.
 	 */
 	public SseEmitter subscribe() {
 		SseEmitter emitter = new SseEmitter(0L);
@@ -165,15 +227,16 @@ public class EventStore {
 		emitter.onCompletion(() -> this.subscribers.remove(subscriber));
 		emitter.onTimeout(() -> this.subscribers.remove(subscriber));
 		emitter.onError(ex -> this.subscribers.remove(subscriber));
-		this.dispatcher.execute(() -> {
-			List<Map<String, Object>> history = events();
+		this.subscribers.add(subscriber);
+		this.catchUp.execute(() -> {
 			try {
-				for (Map<String, Object> event : history) {
-					send(subscriber, event);
+				for (Map<String, Object> event : events()) {
+					subscriber.send(event);
 				}
-				this.subscribers.add(subscriber);
+				subscriber.goLive();
 			}
 			catch (IOException | RuntimeException ex) {
+				this.subscribers.remove(subscriber);
 				emitter.completeWithError(ex);
 			}
 		});
@@ -183,6 +246,7 @@ public class EventStore {
 	@PreDestroy
 	void shutdown() {
 		this.dispatcher.shutdownNow();
+		this.catchUp.shutdownNow();
 	}
 
 	/**
@@ -350,23 +414,12 @@ public class EventStore {
 	private void broadcast(Map<String, Object> event) {
 		for (Subscriber subscriber : this.subscribers) {
 			try {
-				send(subscriber, event);
+				subscriber.deliver(event);
 			}
 			catch (Exception ex) {
 				this.subscribers.remove(subscriber);
 			}
 		}
-	}
-
-	private static void send(Subscriber subscriber, Map<String, Object> event) throws IOException {
-		Object seq = event.get("seq");
-		if (seq instanceof Long s) {
-			if (s <= subscriber.lastSeq) {
-				return; // already sent as part of the replayed history
-			}
-			subscriber.lastSeq = s;
-		}
-		subscriber.emitter.send(SseEmitter.event().data(event, MediaType.APPLICATION_JSON));
 	}
 
 }
