@@ -47,6 +47,16 @@ public class InspectorClient {
 
 	private final JsonHelper json = new JsonHelper();
 
+	/** Work handed to the background thread and not done yet: events posted meanwhile queue behind it. */
+	private final java.util.concurrent.atomic.AtomicInteger queued = new java.util.concurrent.atomic.AtomicInteger();
+
+	/**
+	 * Media uploaded so far, by the identity of its data, so the image in a message is uploaded once
+	 * however many views and turns show it. Weak: forgotten with the data; cleared when the inspector
+	 * was unreachable, since it may have restarted without the blobs.
+	 */
+	private final Map<Object, Media> uploaded = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
 	private final URI eventsUri;
 
 	private final URI blobsUri;
@@ -118,8 +128,34 @@ public class InspectorClient {
 	/** Builds and posts an event on the calling thread. Never throws. */
 	public void send(String type, Supplier<Map<String, Object>> payload) {
 		String body = build(type, payload);
-		if (body != null) {
+		if (body == null) {
+			return;
+		}
+		// Behind the background work when there is any (an upload the event names), so the inspector
+		// never gets an event before the media it points to; posted here otherwise.
+		if (this.queued.get() > 0) {
+			background(() -> deliver(body));
+		}
+		else {
 			deliver(body);
+		}
+	}
+
+	private void background(Runnable work) {
+		this.queued.incrementAndGet();
+		try {
+			this.asyncSender.execute(() -> {
+				try {
+					work.run();
+				}
+				finally {
+					this.queued.decrementAndGet();
+				}
+			});
+		}
+		catch (RuntimeException ex) {
+			this.queued.decrementAndGet();
+			throw ex;
 		}
 	}
 
@@ -127,7 +163,7 @@ public class InspectorClient {
 	public void sendAsync(String type, Supplier<Map<String, Object>> payload) {
 		String body = build(type, payload);
 		if (body != null) {
-			this.asyncSender.execute(() -> deliver(body));
+			background(() -> deliver(body));
 		}
 	}
 
@@ -152,7 +188,7 @@ public class InspectorClient {
 		if (ts < this.pausedUntil) {
 			return;
 		}
-		this.asyncSender.execute(() -> {
+		background(() -> {
 			String body = build(type, payload, ts);
 			if (body != null) {
 				deliver(body);
@@ -181,6 +217,7 @@ public class InspectorClient {
 				}
 			}
 			this.down = false;
+			this.uploaded.clear(); // the inspector may have restarted without the blobs
 		}
 		post(body);
 	}
@@ -218,7 +255,7 @@ public class InspectorClient {
 		}
 		String type = InspectorMedia.type(contentType, bytes);
 		String id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-		this.asyncSender.execute(() -> {
+		background(() -> {
 			if (System.currentTimeMillis() < this.pausedUntil) {
 				return;
 			}
@@ -233,6 +270,23 @@ public class InspectorClient {
 			}
 		});
 		return new Media(id, type, bytes.length);
+	}
+
+	/**
+	 * Like {@link #sendBlob(byte[], String)}, but uploads the media once per {@code key} (the
+	 * object holding its bytes: the same image appears in the CLIENT and MODEL views of a call
+	 * and in every later turn of the conversation) and answers with the same id afterwards.
+	 */
+	public Media sendBlob(Object key, byte[] bytes, String contentType) {
+		Media before = this.uploaded.get(key);
+		if (before != null) {
+			return before;
+		}
+		Media media = sendBlob(bytes, contentType);
+		if (media != null) {
+			this.uploaded.put(key, media);
+		}
+		return media;
 	}
 
 	/** Media larger than this is not uploaded (the inspector keeps items up to its own limit). */
@@ -259,9 +313,21 @@ public class InspectorClient {
 		}
 	}
 
-	/** Stops the background sender; events handed to it before are still posted. */
+	/**
+	 * Stops the background sender, waiting a few seconds for what was handed to it: the last
+	 * uploads, the events queued behind them and the run-end event. The thread is a daemon,
+	 * so without the wait a short-lived application exits before its last answer is posted.
+	 */
 	public void shutdown() {
 		this.asyncSender.shutdown();
+		try {
+			if (!this.asyncSender.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+				System.err.println("Spring AI Inspector: events still queued at shutdown were dropped");
+			}
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	/** Waits until the events handed to the background thread so far are posted (tests). */

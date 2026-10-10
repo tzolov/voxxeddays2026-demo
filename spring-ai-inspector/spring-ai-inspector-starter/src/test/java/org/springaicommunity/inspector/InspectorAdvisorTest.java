@@ -15,7 +15,11 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.util.JsonHelper;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -62,6 +66,73 @@ class InspectorAdvisorTest {
 		assertThat(clientRequest.get("runId")).isEqualTo("run-1");
 		assertThat(clientRequest.get("messages").toString()).contains("hi");
 		assertThat(this.events.get(3).get("generations").toString()).contains("hello");
+	}
+
+	@Test
+	void mediaIsUploadedOnceAndNamedInEveryViewOfTheCall() {
+		List<String> uploads = new CopyOnWriteArrayList<>();
+		InspectorClient uploading = new InspectorClient("run-1", body -> this.events.add(new JsonHelper().fromJsonToMap(body)),
+				(id, bytes, type) -> uploads.add(id + " " + type + " " + bytes.length));
+		byte[] drawn = png(1200);
+		ChatModel painter = prompt -> new ChatResponse(List.of(new Generation(AssistantMessage.builder()
+			.content("here you go")
+			.media(List.of(Media.builder().mimeType(MimeTypeUtils.IMAGE_PNG).data(drawn).build()))
+			.build())));
+		ChatClient chat = observed(painter)
+			.defaultAdvisors(new InspectorAdvisor(uploading, Phase.CLIENT), new InspectorAdvisor(uploading, Phase.MODEL))
+			.build();
+
+		chat.prompt().user(u -> u.text("make it night").media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(png(800)))).call().content();
+		uploading.awaitBackground();
+
+		Map<String, Object> sent = firstMedia(this.events.get(0), "messages");
+		assertThat(sent).containsEntry("type", "image/png").containsEntry("size", 800);
+		assertThat(sent.get("blobId").toString()).matches("[0-9a-f]{16}");
+		assertThat(firstMedia(this.events.get(1), "messages")).isEqualTo(sent); // the MODEL view: the same blob
+		Map<String, Object> got = firstMedia(this.events.get(2), "generations");
+		assertThat(got).containsEntry("type", "image/png").containsEntry("size", 1200);
+		assertThat(got.get("blobId")).isNotEqualTo(sent.get("blobId"));
+		assertThat(firstMedia(this.events.get(3), "generations")).isEqualTo(got); // the CLIENT view: the same blob
+		assertThat(uploads).containsExactlyInAnyOrder(sent.get("blobId") + " image/png 800", got.get("blobId") + " image/png 1200");
+	}
+
+	@Test
+	void mediaOfARoutedProviderIsDescribedButLeftToTheWire() {
+		List<String> uploads = new CopyOnWriteArrayList<>();
+		InspectorClient uploading = new InspectorClient("run-1", body -> this.events.add(new JsonHelper().fromJsonToMap(body)),
+				(id, bytes, type) -> uploads.add(id));
+		// ChatOptions.builder() builds a DefaultChatOptions: the provider "default", routed here.
+		ChatClient chat = observed(this.model)
+			.defaultAdvisors(new InspectorAdvisor(uploading, Phase.CLIENT, null, java.util.Set.of("default")),
+					new InspectorAdvisor(uploading, Phase.MODEL, null, java.util.Set.of("default")))
+			.build();
+
+		chat.prompt()
+			.user(u -> u.text("what is this").media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(png(800))))
+			.options(ChatOptions.builder())
+			.call()
+			.content();
+		uploading.awaitBackground();
+
+		assertThat(firstMedia(this.events.get(0), "messages")).containsEntry("type", "image/png")
+			.containsEntry("size", 800)
+			.doesNotContainKey("blobId");
+		assertThat(uploads).isEmpty();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> firstMedia(Map<String, Object> event, String list) {
+		List<Map<String, Object>> messages = (List<Map<String, Object>>) event.get(list);
+		return ((List<Map<String, Object>>) messages.get(0).get("media")).get(0);
+	}
+
+	private static byte[] png(int size) {
+		byte[] bytes = new byte[size];
+		bytes[0] = (byte) 0x89;
+		bytes[1] = 'P';
+		bytes[2] = 'N';
+		bytes[3] = 'G';
+		return bytes;
 	}
 
 	@Test

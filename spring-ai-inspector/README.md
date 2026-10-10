@@ -36,7 +36,10 @@ with a player), **transcription** (`/v1/audio/transcriptions`, `/translations`: 
 transcript, language and duration) and **moderation** (`/v1/moderations`: each input with its verdict and
 top category scores). Images, PDFs and audio sent inline in chat messages (vision, audio input: 23, 26) are
 shown in the message too, and so are a chat model's audio answer (`gpt-audio`, 26) and an image a Responses
-call made with the hosted image tool.
+call made with the hosted image tool. A chat model that answers with an image through an SDK the proxy never
+sees (Gemini's image models, 27) is shown from the ChatClient advisors: the starter uploads the media of the
+messages and generations once per item, so the drawn image and the edit requested with it are both previewed.
+(Demo 27 runs on Spring AI 2.1.0-SNAPSHOT: 2.1.0-M1 drops the image parts of a Gemini answer.)
 
 The same views show the calls of `ImageModel`, `TextToSpeechModel`, `TranscriptionModel` and `ModerationModel`
 beans that make no HTTP round-trip the proxy sees (a model in the JVM, Google GenAI or Bedrock through their

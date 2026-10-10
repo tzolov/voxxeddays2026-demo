@@ -197,6 +197,15 @@ details.resent[open] > .msgs { margin-top: .4rem; }
 .block-label { font-size: .7rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .15rem; }
 .block.tool-use { border-color: var(--assistant); }
 .block.tool-result { border-color: var(--tool); }
+/* Media previews (images, audio, files) in messages, wire bodies and tool results: a bounded thumbnail that
+   opens full size in a new tab; the "no longer available" note shows only when the blob failed to load. */
+.block.media { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; }
+.block.media .block-label { flex-basis: 100%; margin-bottom: 0; }
+.media-link { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .2rem; max-width: 100%; text-decoration: none; vertical-align: top; }
+img.media { display: block; max-width: 100%; max-height: 18rem; width: auto; height: auto; border: 1px solid var(--line); border-radius: .35rem; background: var(--panel); }
+img.media.gone, .media-gone { display: none; }
+img.media.gone + .media-gone { display: inline-block; }
+audio.media { display: block; max-width: 100%; height: 2rem; margin: .15rem 0; }
 .block pre, .msg pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: .82rem; max-height: 18rem; overflow: auto; }
 .fn { font-family: var(--mono); font-weight: 700; }
 

@@ -70,6 +70,10 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 
 	private final InspectorMemoryReader memoryReader;
 
+	/** Providers whose calls are on the wire: their media is shown from there, not uploaded again. */
+	private final java.util.Set<String> routed;
+
+
 	/**
 	 * The observation Spring AI opened around this very advisor, or null: only that one is
 	 * tagged. Whatever else may be current (a ChatClient without a registry called inside an
@@ -82,13 +86,18 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	public InspectorAdvisor(InspectorClient client, Phase phase) {
-		this(client, phase, null);
+		this(client, phase, null, java.util.Set.of());
 	}
 
 	InspectorAdvisor(InspectorClient client, Phase phase, InspectorMemoryReader memoryReader) {
+		this(client, phase, memoryReader, java.util.Set.of());
+	}
+
+	InspectorAdvisor(InspectorClient client, Phase phase, InspectorMemoryReader memoryReader, java.util.Set<String> routed) {
 		this.client = client;
 		this.phase = phase;
 		this.memoryReader = memoryReader;
+		this.routed = routed;
 	}
 
 	@Override
@@ -132,7 +141,8 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 				sendMemorySnapshot(callId, "after", chain.getCallAdvisors(), request.context(), false);
 			}
 			long durationMs = System.currentTimeMillis() - start;
-			this.client.send(responseType(), () -> responseEvent(callId, response, durationMs));
+			ChatClientRequest sent = request;
+			this.client.send(responseType(), () -> responseEvent(callId, sent, response, durationMs));
 			return response;
 		}
 		catch (RuntimeException ex) {
@@ -170,7 +180,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 					if (this.phase == Phase.CLIENT) {
 						sendMemorySnapshot(callId, "after", chain.getStreamAdvisors(), streamRequest.context(), true);
 					}
-					this.client.sendAsync(responseType(), () -> responseEvent(callId, response, System.currentTimeMillis() - start));
+					this.client.sendAsync(responseType(), () -> responseEvent(callId, streamRequest, response, System.currentTimeMillis() - start));
 				})
 				.doOnError(ex -> this.client.sendAsync(responseType(), () -> errorEvent(callId,
 						ex instanceof RuntimeException rex ? rex : new RuntimeException(ex), System.currentTimeMillis() - start)));
@@ -178,7 +188,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	/** The CLIENT request: with its parent call and tool, the advisor chain and the RAG setup. */
-	private static Map<String, Object> clientRequestEvent(String callId, InspectorCorrelation.Parent parent,
+	private Map<String, Object> clientRequestEvent(String callId, InspectorCorrelation.Parent parent,
 			ChatClientRequest request, List<? extends Advisor> advisors) {
 		Map<String, Object> event = requestEvent(callId, parent.callId(), request, advisorNames(advisors));
 		if (parent.toolId() != null) {
@@ -242,7 +252,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		return advisors;
 	}
 
-	private static Map<String, Object> requestEvent(String callId, String parentId, ChatClientRequest request,
+	private Map<String, Object> requestEvent(String callId, String parentId, ChatClientRequest request,
 			List<Map<String, Object>> advisors) {
 		Map<String, Object> event = new LinkedHashMap<>();
 		event.put("callId", callId);
@@ -251,21 +261,38 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		if (advisors != null) {
 			event.put("advisors", advisors);
 		}
-		event.put("messages", request.prompt().getInstructions().stream().map(InspectorAdvisor::message).toList());
+		boolean keep = keepsMedia(request.prompt().getOptions());
+		event.put("messages", request.prompt().getInstructions().stream().map(m -> message(m, keep)).toList());
 		event.put("options", options(request.prompt().getOptions()));
 		event.put("context", context(request.context()));
 		return event;
 	}
 
-	private static Map<String, Object> responseEvent(String callId, ChatClientResponse response, long durationMs) {
+	/**
+	 * Whether this call's media is uploaded for previews: yes unless the provider (named by
+	 * the options type, e.g. {@code AnthropicChatOptions}) is routed through the proxy, where
+	 * the wire recording already keeps it.
+	 */
+	private boolean keepsMedia(ChatOptions options) {
+		if (options == null) {
+			return true;
+		}
+		// OpenAiChatOptions -> openai, OpenAiResponsesChatOptions -> openairesponses: the routed name is a prefix.
+		String provider = options.getClass().getSimpleName().replaceAll("(Chat)?Options$", "").toLowerCase(java.util.Locale.ROOT);
+		return this.routed.stream().noneMatch(provider::startsWith);
+	}
+
+	private Map<String, Object> responseEvent(String callId, ChatClientRequest request, ChatClientResponse response, long durationMs) {
 		Map<String, Object> event = new LinkedHashMap<>();
 		event.put("callId", callId);
 		event.put("durationMs", durationMs);
 		ChatResponse chatResponse = response.chatResponse();
 		if (chatResponse != null) {
+			// Output media (an image a Gemini image model drew): uploaded once; the CLIENT view reuses it.
+			boolean keep = keepsMedia(request.prompt().getOptions());
 			List<Map<String, Object>> generations = new ArrayList<>();
 			for (Generation generation : chatResponse.getResults()) {
-				Map<String, Object> g = message(generation.getOutput());
+				Map<String, Object> g = message(generation.getOutput(), keep);
 				g.put("finishReason", generation.getMetadata().getFinishReason());
 				// Spring AI's Anthropic model returns each thinking block as a generation of its own,
 				// before the answer: marked by its signature, or by the encrypted data when redacted.
@@ -302,7 +329,17 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		return event;
 	}
 
+	/** A message with its media described by type only (memory snapshots). */
 	static Map<String, Object> message(Message message) {
+		return describe(message, null, false);
+	}
+
+	/** A message with its media described, and uploaded for previews when {@code keep}. */
+	private Map<String, Object> message(Message message, boolean keep) {
+		return describe(message, this.client, keep);
+	}
+
+	private static Map<String, Object> describe(Message message, InspectorClient client, boolean keep) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("role", message.getMessageType().getValue());
 		m.put("text", message.getText());
@@ -319,10 +356,59 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 				.map(r -> entry("id", r.id(), "name", r.name(), "data", r.responseData()))
 				.toList());
 		}
-		if (message instanceof UserMessage user && !user.getMedia().isEmpty()) {
-			m.put("media", user.getMedia().stream().map(media -> media.getMimeType().toString()).toList());
+		List<org.springframework.ai.content.Media> media = message instanceof UserMessage user ? user.getMedia()
+				: message instanceof AssistantMessage assistant ? assistant.getMedia() : List.of();
+		if (!media.isEmpty()) {
+			m.put("media", media.stream().map(item -> mediaEntry(item, client, keep)).toList());
 		}
 		return m;
+	}
+
+	/**
+	 * A media item of a message: its type and size, and the blob it was uploaded under when
+	 * it is kept for a preview. The bytes are read from the item (a byte array, a resource,
+	 * a data URL); a URL to a remote file is described as a link.
+	 */
+	static Map<String, Object> mediaEntry(org.springframework.ai.content.Media media, InspectorClient client, boolean keep) {
+		Map<String, Object> entry = new LinkedHashMap<>();
+		entry.put("type", media.getMimeType() == null ? "" : media.getMimeType().toString());
+		Object data = media.getData();
+		if (data instanceof java.net.URL || data instanceof java.net.URI) {
+			entry.put("url", data.toString());
+			return entry;
+		}
+		byte[] bytes = bytes(data);
+		if (bytes == null) {
+			if (data instanceof String s) {
+				entry.put("url", s);
+			}
+			return entry;
+		}
+		entry.put("size", bytes.length);
+		if (keep && client != null) {
+			InspectorClient.Media kept = client.sendBlob(data, bytes, (String) entry.get("type"));
+			if (kept != null) {
+				entry.put("type", kept.contentType());
+				entry.put("blobId", kept.id());
+			}
+		}
+		return entry;
+	}
+
+	/** The bytes of a media item's data: a byte array (a Resource is read into one), or an inline data URL. */
+	private static byte[] bytes(Object data) {
+		if (data instanceof byte[] bytes) {
+			return bytes;
+		}
+		if (data instanceof String s && s.startsWith("data:") && s.contains(";base64,")) {
+			try {
+				return java.util.Base64.getDecoder().decode(s.substring(s.indexOf(";base64,") + 8));
+			}
+			catch (IllegalArgumentException ex) {
+				return null;
+			}
+		}
+		return null;
 	}
 
 	private static Map<String, Object> options(ChatOptions options) {

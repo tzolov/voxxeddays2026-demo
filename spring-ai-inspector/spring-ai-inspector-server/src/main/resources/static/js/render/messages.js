@@ -1,5 +1,5 @@
 import { esc, fmtNum, isOpen, prettyMaybeJson, renderText } from '../util.js';
-import { renderBlock } from './wire.js';
+import { renderBlock, renderMedia } from './wire.js';
 
 export const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 
@@ -40,7 +40,9 @@ export function renderSpringMessage(m, mark) {
 	for (const tr of m.toolResponses || []) {
 		html += `<div class="block tool-result"><div class="block-label">tool result · <span class="fn">${esc(tr.name)}</span></div><pre>${prettyMaybeJson(tr.data)}</pre></div>`;
 	}
-	if (m.media && m.media.length) html += `<div class="block"><div class="block-label">media</div>${m.media.map(esc).join(', ')}</div>`;
+	// Media: mime types in older recordings; {type, size, blobId|url} since the starter uploads them for providers off the wire.
+	if (m.media && m.media.length) html += `<div class="block media"><div class="block-label">media</div>${m.media.map((x) => typeof x === 'string' ? `<span class="tag muted">${esc(x)}</span>`
+		: renderMedia(x.blobId || x.url ? { blobId: x.blobId, url: x.url, type: x.type, size: x.size } : null) || `<span class="tag muted">${esc(x.type || 'media')}${x.size != null ? ` · ${fmtNum(x.size)} bytes` : ''}${x.blobId ? '' : ' (on the wire)'}</span>`).join('')}</div>`;
 	return html + '</div>';
 }
 

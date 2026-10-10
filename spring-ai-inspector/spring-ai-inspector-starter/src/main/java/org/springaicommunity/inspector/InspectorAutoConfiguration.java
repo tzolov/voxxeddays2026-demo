@@ -55,8 +55,17 @@ public class InspectorAutoConfiguration {
 			Environment env) {
 		// Memory snapshots read the stores twice per call; off for apps where that costs.
 		boolean snapshots = env.getProperty("spring.ai.inspector.memory-snapshots", Boolean.class, true);
-		return builder -> builder.defaultAdvisors(new InspectorAdvisor(client, Phase.CLIENT, snapshots ? memoryReader : null),
-				new InspectorAdvisor(client, Phase.MODEL));
+		java.util.Set<String> routed = routed(env);
+		return builder -> builder.defaultAdvisors(new InspectorAdvisor(client, Phase.CLIENT, snapshots ? memoryReader : null, routed),
+				new InspectorAdvisor(client, Phase.MODEL, null, routed));
+	}
+
+	/** The providers routed through the proxy: their media and calls are recorded on the wire. */
+	static java.util.Set<String> routed(Environment env) {
+		return java.util.Arrays.stream(env.getProperty(InspectorEnvironmentPostProcessor.ROUTED, "").split(","))
+			.map(String::trim)
+			.filter(p -> !p.isEmpty())
+			.collect(java.util.stream.Collectors.toSet());
 	}
 
 	/** Where the inspector listens, so the correlation headers go only on requests to it. */
@@ -207,11 +216,7 @@ public class InspectorAutoConfiguration {
 	@Bean
 	static InspectorModelPostProcessor inspectorModelPostProcessor(ObjectProvider<InspectorClient> client,
 			Environment env) {
-		java.util.Set<String> routed = java.util.Arrays.stream(env.getProperty(InspectorEnvironmentPostProcessor.ROUTED, "").split(","))
-			.map(String::trim)
-			.filter(p -> !p.isEmpty())
-			.collect(java.util.stream.Collectors.toSet());
-		return new InspectorModelPostProcessor(client, routed);
+		return new InspectorModelPostProcessor(client, routed(env));
 	}
 
 	/** Reports embedding calls, including those of models running in the JVM (no HTTP to record). */

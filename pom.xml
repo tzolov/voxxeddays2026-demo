@@ -63,6 +63,7 @@
 		<module>24-image-generation</module>
 		<module>25-speech-and-transcription</module>
 		<module>26-audio-chat</module>
+		<module>27-gemini-image-chat</module>
 
 	</modules>
 

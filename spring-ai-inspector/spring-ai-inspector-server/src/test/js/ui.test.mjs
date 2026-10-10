@@ -806,6 +806,22 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
 });
 
+test('message media the starter uploaded is shown; older recordings name the type only', () => {
+	const html = renderSpringMessage({ role: 'user', text: 'make it night', media: [
+		{ type: 'image/png', size: 1200, blobId: 'abc' }, // uploaded by the advisor (a provider off the wire)
+		{ type: 'image/png', size: 900 }, // described only: on the wire, or too large
+		{ type: 'image/jpeg', url: 'https://x.example/a.jpg' },
+		'application/pdf', // a recording from before the upload
+	] });
+	assert.match(html, /<div class="block media"><div class="block-label">media<\/div>/);
+	assert.match(html, /<img class="media" src="api\/blobs\/abc"/);
+	assert.match(html, /image\/png · 900 bytes \(on the wire\)/);
+	assert.match(html, /<img class="media" src="https:\/\/x\.example\/a\.jpg"/);
+	assert.match(html, /<span class="tag muted">application\/pdf<\/span>/);
+	// An answer with an image is rendered as a message, not folded to a text preview.
+	assert.match(renderAnswerMessage({ role: 'assistant', text: 'here', media: [{ type: 'image/png', size: 5, blobId: 'def' }] }, 'ans:c1:0'), /api\/blobs\/def/);
+});
+
 test('answers fold to a one-line preview and remember being opened', () => {
 	const m = { role: 'assistant', text: 'Shops open now:\nFoo, Bar.' };
 	assert.match(renderAnswerMessage(m, 'ans:c1:0'), /^<details class="msg assistant" data-key="ans:c1:0" data-lazy >/);

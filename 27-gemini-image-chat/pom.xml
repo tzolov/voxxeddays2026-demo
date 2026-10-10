@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.example</groupId>
+		<artifactId>voxxeddays2026-demo</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+	</parent>
+	<artifactId>27-gemini-image-chat</artifactId>
+	<name>27 - Gemini image chat</name>
+	<description>Spring AI: a chat model that answers with an image (Gemini image models), drawn then edited over two turns, as the inspector sees it without a proxy</description>
+
+	<properties>
+		<!-- Spring AI 2.1.0-M1 drops the image parts of a Gemini answer (the mapping to AssistantMessage media came
+		     with "Google GenAI to use message parts", 4ee251b, after M1). This module alone runs on the snapshot;
+		     remove the override with 2.1.0-M2. -->
+		<spring-ai.version>2.1.0-SNAPSHOT</spring-ai.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>com.example</groupId>
+			<artifactId>common</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-google-genai</artifactId>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>

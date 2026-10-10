@@ -285,12 +285,22 @@ auto-configured `ChatClient.Builder`, and it adds two `InspectorAdvisor`s as def
 Comparing the two shows what the advisors in between added. Spring AI's `ToolCallingAdvisor` (order
 `HIGHEST_PRECEDENCE + 300`) loops through the rest of the chain once per model round-trip, so the `MODEL` advisor
 reports every round-trip of a tool-calling conversation, while the `CLIENT` advisor reports the call once. Each request event carries the messages, including
-tool calls, tool responses and media types. It also carries the options (model, max tokens, temperature, tool
+tool calls, tool responses and media. It also carries the options (model, max tokens, temperature, tool
 definitions) and the advisor context. Retrieved RAG documents keep their id, score, text and metadata. The `CLIENT`
 request also lists the advisor chain with names and orders.
 
-Each response event carries the generations with their finish reasons and thinking blocks, the model, token usage
-(including cache reads and writes), the duration, and any error.
+Each response event carries the generations with their finish reasons, thinking blocks and media, the model,
+token usage (including cache reads and writes), the duration, and any error.
+
+**Media.** A message's images, documents and audio are described by type and size (`messages[].media[]`,
+`generations[].media[]`). When the provider is routed through the proxy, the bytes are already in the wire
+recording and stay there. When it is not (Google GenAI or Bedrock through their SDKs, a model in the JVM),
+the advisor uploads them to the inspector (`PUT /api/blobs/<id>`, up to 16 MB an item) and names the blob in
+the entry, so the picture the app sent and the image a Gemini image model drew are shown in the call. Each
+item is uploaded once, however many views (CLIENT, MODEL) and later turns carry it: the client remembers the
+blob by the object holding the bytes. The provider is read from the options type (`GoogleGenAiChatOptions`
+→ `googlegenai`) against the routed list the environment post-processor reports. A media item given as a URL
+is recorded as the link.
 
 **Correlation.** The `CLIENT` advisor gives each call an id, and the calls, tool runs, searches and HTTP
 round-trips find each other by Micrometer observation parentage, not by thread:
@@ -387,7 +397,8 @@ Spring AI has its own vector store observations, but they fire only when the sto
   model in the JVM or behind an SDK (Google GenAI, Bedrock) exactly like a proxied one, marked "no HTTP".
 - The media of the call is uploaded to the inspector from the background thread (`PUT /api/blobs/<id>`, up
   to 16 MB an item, under an id the starter mints and puts in the event; the event follows the media on the
-  same thread), so an image generated in the JVM is shown and synthesized speech can be played. The type is
+  same thread, and an event posted from the application thread while an upload is pending queues behind it
+  too), so an image generated in the JVM is shown and synthesized speech can be played. The type is
   the format's, or sniffed from the bytes. An audio input is read for the preview only when it can be read
   again (a file, a byte array, a class path resource); a stream or a URL is left to the model and described
   by name and size.
