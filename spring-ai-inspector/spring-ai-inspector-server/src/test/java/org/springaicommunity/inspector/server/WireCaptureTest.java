@@ -72,6 +72,22 @@ class WireCaptureTest {
 	}
 
 	@Test
+	void sniffsTheTypeFromAPrefixSoOnlyMediaIsDecodedWhole() {
+		// A payload whose tail is not valid base64 is still cut and typed by its first bytes, since
+		// only the first 16 characters are decoded to sniff; it is not kept, as decoding it whole fails.
+		byte[] png = new byte[1500];
+		png[0] = (byte) 0x89; png[1] = 'P'; png[2] = 'N'; png[3] = 'G';
+		String payload = java.util.Base64.getEncoder().encodeToString(png);
+		String broken = payload.substring(0, payload.length() - 4) + "A==="; // not decodable as a whole
+		BlobStore blobs = new BlobStore(1_000_000, 100_000);
+
+		String stripped = new WireCapture(100_000, blobs).stripBase64("{\"d\":\"" + broken + "\"}");
+
+		assertThat(stripped).isEqualTo("{\"d\":\"<base64 " + broken.length() + " chars image/png>\"}");
+		assertThat(blobs.size()).isZero();
+	}
+
+	@Test
 	void keepsABinaryBodyAsABlob() {
 		BlobStore blobs = new BlobStore(1_000_000, 100_000);
 		Map<String, Object> event = new LinkedHashMap<>();

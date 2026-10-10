@@ -806,6 +806,21 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
 });
 
+test('a wire round-trip or model call recorded before its ChatClient call is adopted by the call', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' });
+	handle({ type: 'wire-request', runId: 'r', ts: 2, wireId: 'w1', clientCallId: 'c1', modelCallId: 'm1', provider: 'openai', path: '/v1/chat/completions', body: '{}' });
+	handle({ type: 'model-request', runId: 'r', ts: 3, callId: 'm1', parentId: 'c1', messages: [] });
+	const run = state.runs.get('r');
+	assert.equal(run.items.length, 1); // the wire, at run level for now
+	handle({ type: 'client-request', runId: 'r', ts: 4, callId: 'c1', messages: [] });
+	const call = run.calls.get('c1');
+	assert.deepEqual(run.items.map((i) => i.kind), ['call']);
+	assert.deepEqual(call.items.map((i) => i.kind), ['wire', 'model']);
+	assert.equal(call.wires[0].id, 'w1');
+	assert.equal(run.modelCalls.get('m1').call, call);
+});
+
 test('events in a newer format are kept and the run says so; older ones are read as they are', () => {
 	state.runs.clear();
 	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' }); // before versioning: no v

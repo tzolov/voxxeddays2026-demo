@@ -41,6 +41,50 @@ class InspectorClientTest {
 	}
 
 	@Test
+	void anEventQueuesBehindAnUploadButNotBehindOtherBackgroundWork() throws Exception {
+		List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+		java.util.concurrent.CountDownLatch uploadMayFinish = new java.util.concurrent.CountDownLatch(1);
+		InspectorClient client = new InspectorClient("run-1", body -> order.add(body.contains("\"type\":\"a\"") ? "a"
+				: body.contains("\"type\":\"b\"") ? "b" : "c"), (id, bytes, type) -> {
+					try {
+						uploadMayFinish.await();
+					}
+					catch (InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+					order.add("upload");
+				});
+
+		client.sendAsync("a", Map::of); // async work pending: a synchronous event still goes out at once
+		client.send("b", Map::of);
+		client.awaitBackground();
+		assertThat(order).containsExactly("a", "b").as("'b' was posted inline, 'a' from the background thread");
+		order.clear();
+
+		InspectorClient.Media media = client.sendBlob(new byte[] { 1, 2, 3 }, "image/png");
+		client.send("c", () -> Map.of("blobId", media.id())); // names the blob: waits for it
+		assertThat(order).isEmpty();
+		uploadMayFinish.countDown();
+		client.awaitBackground();
+		assertThat(order).containsExactly("upload", "c");
+	}
+
+	@Test
+	void afterShutdownNothingIsThrownAtTheCaller() {
+		List<String> sent = new ArrayList<>();
+		InspectorClient client = new InspectorClient("run-1", sent::add, (id, bytes, type) -> {
+		});
+		client.shutdown();
+
+		assertThatNoException().isThrownBy(() -> {
+			assertThat(client.sendBlob(new byte[] { 1 }, "image/png")).isNull();
+			client.sendAsync("x", Map::of);
+			client.send("y", Map::of);
+		});
+		assertThat(sent).hasSize(1); // the synchronous event still went out on the caller's thread
+	}
+
+	@Test
 	void theRunIsAnnouncedAgainAfterTheInspectorWasUnreachable() throws Exception {
 		List<String> sent = new ArrayList<>();
 		AtomicInteger posts = new AtomicInteger();

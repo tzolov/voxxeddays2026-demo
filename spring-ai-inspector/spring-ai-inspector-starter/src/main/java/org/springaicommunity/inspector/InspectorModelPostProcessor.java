@@ -3,7 +3,6 @@ package org.springaicommunity.inspector;
 import java.io.InputStream;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,7 +58,6 @@ import org.springframework.core.io.Resource;
 public class InspectorModelPostProcessor implements BeanPostProcessor {
 
 	/** Media larger than this is described but not uploaded. */
-	static final int MAX_MEDIA = 16 * 1024 * 1024;
 
 	private final ObjectProvider<InspectorClient> client;
 
@@ -256,9 +254,9 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			Map<String, Object> image = new LinkedHashMap<>();
 			Image output = generation.getOutput();
 			Map<String, Object> media = new LinkedHashMap<>();
-			Object b64 = InspectorReflection.field(output, "b64Json");
-			if (b64 instanceof String data && !data.isBlank()) {
-				byte[] bytes = decodeBase64(data);
+			String data = output.getB64Json();
+			if (data != null && !data.isBlank()) {
+				byte[] bytes = InspectorMedia.decodeBase64(data);
 				media.put("type", bytes == null ? "" : InspectorMedia.type(null, bytes));
 				media.put("chars", data.length());
 				if (bytes != null) {
@@ -374,8 +372,8 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 				return null;
 			}
 			try (InputStream in = resource.getInputStream()) {
-				byte[] bytes = in.readNBytes(MAX_MEDIA + 1);
-				return bytes.length > MAX_MEDIA ? null : bytes;
+				byte[] bytes = in.readNBytes(InspectorMedia.MAX_BYTES + 1);
+				return bytes.length > InspectorMedia.MAX_BYTES ? null : bytes;
 			}
 		}
 		catch (Exception ex) {
@@ -456,20 +454,6 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 	private static void put(Map<String, Object> params, String key, Object value) {
 		if (value != null) {
 			params.put(key, value);
-		}
-	}
-
-	private static byte[] decodeBase64(String data) {
-		try {
-			return Base64.getDecoder().decode(data);
-		}
-		catch (IllegalArgumentException ex) {
-			try {
-				return Base64.getUrlDecoder().decode(data);
-			}
-			catch (IllegalArgumentException again) {
-				return null;
-			}
 		}
 	}
 

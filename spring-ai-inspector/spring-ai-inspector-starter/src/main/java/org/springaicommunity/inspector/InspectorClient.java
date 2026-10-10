@@ -47,8 +47,14 @@ public class InspectorClient {
 
 	private final JsonHelper json = new JsonHelper();
 
-	/** Work handed to the background thread and not done yet: events posted meanwhile queue behind it. */
-	private final java.util.concurrent.atomic.AtomicInteger queued = new java.util.concurrent.atomic.AtomicInteger();
+	/**
+	 * Uploads handed to the background thread and not done yet. An event posted meanwhile
+	 * queues behind them (it may name one of them), so the inspector never gets an event
+	 * before the media it points to. Other background work (an async event) doesn't hold
+	 * events back: a synchronous event must reach the inspector before the HTTP call it
+	 * describes gets to the proxy, and uploads only happen for providers that aren't proxied.
+	 */
+	private final java.util.concurrent.atomic.AtomicInteger uploading = new java.util.concurrent.atomic.AtomicInteger();
 
 	/**
 	 * Media uploaded so far, by the identity of its data, so the image in a message is uploaded once
@@ -131,9 +137,7 @@ public class InspectorClient {
 		if (body == null) {
 			return;
 		}
-		// Behind the background work when there is any (an upload the event names), so the inspector
-		// never gets an event before the media it points to; posted here otherwise.
-		if (this.queued.get() > 0) {
+		if (this.uploading.get() > 0) {
 			background(() -> deliver(body));
 		}
 		else {
@@ -141,21 +145,13 @@ public class InspectorClient {
 		}
 	}
 
+	/** Hands work to the background thread; after shutdown the work is dropped, never thrown at the caller. */
 	private void background(Runnable work) {
-		this.queued.incrementAndGet();
 		try {
-			this.asyncSender.execute(() -> {
-				try {
-					work.run();
-				}
-				finally {
-					this.queued.decrementAndGet();
-				}
-			});
+			this.asyncSender.execute(work);
 		}
-		catch (RuntimeException ex) {
-			this.queued.decrementAndGet();
-			throw ex;
+		catch (java.util.concurrent.RejectedExecutionException ex) {
+			// shut down: the application is stopping, the event or upload is lost with it
 		}
 	}
 
@@ -250,26 +246,48 @@ public class InspectorClient {
 	 * Null when the media isn't reported (empty, too large, publishing paused).
 	 */
 	public Media sendBlob(byte[] bytes, String contentType) {
-		if (bytes == null || bytes.length == 0 || bytes.length > MAX_BLOB || System.currentTimeMillis() < this.pausedUntil) {
+		if (bytes == null || bytes.length == 0 || bytes.length > InspectorMedia.MAX_BYTES
+				|| System.currentTimeMillis() < this.pausedUntil) {
 			return null;
 		}
 		String type = InspectorMedia.type(contentType, bytes);
 		String id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-		background(() -> {
-			if (System.currentTimeMillis() < this.pausedUntil) {
-				return;
+		this.uploading.incrementAndGet();
+		boolean handed = false;
+		try {
+			this.asyncSender.execute(() -> {
+				try {
+					if (System.currentTimeMillis() < this.pausedUntil) {
+						return;
+					}
+					this.blobTransport.upload(id, bytes, type);
+				}
+				catch (RuntimeException ex) {
+					this.down = true;
+					this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
+					System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
+							+ BACKOFF.toSeconds() + "s");
+				}
+				finally {
+					this.uploading.decrementAndGet();
+				}
+			});
+			handed = true;
+		}
+		catch (java.util.concurrent.RejectedExecutionException ex) {
+			return null; // shut down
+		}
+		finally {
+			if (!handed) {
+				this.uploading.decrementAndGet();
 			}
-			try {
-				this.blobTransport.upload(id, bytes, type);
-			}
-			catch (RuntimeException ex) {
-				this.down = true;
-				this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
-				System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
-						+ BACKOFF.toSeconds() + "s");
-			}
-		});
+		}
 		return new Media(id, type, bytes.length);
+	}
+
+	/** The media already uploaded under this key, if any (see {@link #sendBlob(Object, byte[], String)}). */
+	public Media uploaded(Object key) {
+		return key == null ? null : this.uploaded.get(key);
 	}
 
 	/**
@@ -288,9 +306,6 @@ public class InspectorClient {
 		}
 		return media;
 	}
-
-	/** Media larger than this is not uploaded (the inspector keeps items up to its own limit). */
-	static final int MAX_BLOB = 16 * 1024 * 1024;
 
 	private String build(String type, Supplier<Map<String, Object>> payload) {
 		return build(type, payload, System.currentTimeMillis());
@@ -357,7 +372,8 @@ public class InspectorClient {
 	/** Uploads media to the inspector under the client's id; a 4xx (declined) is not a failure. */
 	private void httpUpload(String id, byte[] bytes, String contentType) {
 		try {
-			HttpRequest.Builder request = HttpRequest.newBuilder(this.blobsUri.resolve(this.blobsUri.getPath() + "/" + id))
+			// Not resolve(): with a URL ending in "/", the path "//api/blobs" would resolve as a host.
+			HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(this.blobsUri + "/" + id))
 				.timeout(Duration.ofSeconds(10))
 				.header("Content-Type", contentType)
 				.PUT(HttpRequest.BodyPublishers.ofByteArray(bytes));

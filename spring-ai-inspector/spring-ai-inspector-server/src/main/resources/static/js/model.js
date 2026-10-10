@@ -36,6 +36,7 @@ export function handle(ev) {
 			run.calls.set(call.id, call);
 			(call.parent ? call.parent.items : run.items).push({ kind: 'call', ref: call });
 			if (call.linkedFrom) linkRemoteCall(call);
+			adoptEarlyItems(run, call);
 			break;
 		}
 		case 'client-response': {
@@ -155,6 +156,23 @@ export function handle(ev) {
 			if (call) { call.memory[ev.phase] = ev.stores; call.memory[ev.phase + 'Seq'] = ev.seq; }
 			break;
 		}
+	}
+}
+
+/**
+ * Round-trips recorded before the ChatClient call they belong to arrived (the proxy stores a wire
+ * request as it forwards it, while the starter's event may still be on its way): moved from the
+ * run's items under the call, so a card is never missing what it has, whatever the order.
+ */
+function adoptEarlyItems(run, call) {
+	for (let i = run.items.length - 1; i >= 0; i--) {
+		const item = run.items[i];
+		if (item.kind === 'wire' && item.ref.req.clientCallId === call.id) {
+			run.items.splice(i, 1); call.items.unshift(item); call.wires.unshift(item.ref);
+		}
+	}
+	for (const mc of run.modelCalls.values()) {
+		if (!mc.call && mc.req.parentId === call.id) { mc.call = call; call.modelCalls.push(mc); call.items.push({ kind: 'model', ref: mc }); }
 	}
 }
 

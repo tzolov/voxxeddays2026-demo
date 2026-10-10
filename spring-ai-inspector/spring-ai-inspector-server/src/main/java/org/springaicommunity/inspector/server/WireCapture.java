@@ -167,9 +167,12 @@ final class WireCapture {
 		StringBuilder out = new StringBuilder(text.length());
 		do {
 			String payload = m.group(2);
-			byte[] bytes = this.blobs == null ? null : decodeBase64(payload);
-			String type = m.group(1) != null ? m.group(1) : bytes == null ? null : sniff(bytes);
-			String blobId = bytes == null || type == null ? null : keep(bytes, type);
+			// The type from the data: URI, else from the first bytes (16 base64 characters are 12 bytes,
+			// enough for every magic number); only media is decoded whole, so an embedding vector or a
+			// signature in base64 costs a prefix.
+			String type = m.group(1) != null ? m.group(1) : sniff(decodeBase64(payload.substring(0, 16)));
+			byte[] bytes = type == null || this.blobs == null ? null : decodeBase64(payload);
+			String blobId = bytes == null ? null : keep(bytes, type);
 			m.appendReplacement(out, Matcher.quoteReplacement("\"" + marker(payload.length(), type, blobId) + "\""));
 		}
 		while (m.find());
@@ -209,7 +212,10 @@ final class WireCapture {
 	}
 
 	/** The media type by magic bytes, for the formats models send and receive, or null. */
-	static @Nullable String sniff(byte[] b) {
+	static @Nullable String sniff(byte @Nullable [] b) {
+		if (b == null) {
+			return null;
+		}
 		if (starts(b, 0x89, 'P', 'N', 'G')) {
 			return "image/png";
 		}

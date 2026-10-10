@@ -8,6 +8,24 @@ final class InspectorMedia {
 	private InspectorMedia() {
 	}
 
+	/** Media larger than this is described but not uploaded (the inspector keeps items up to its own limit). */
+	static final int MAX_BYTES = 16 * 1024 * 1024;
+
+	/** The bytes of a base64 payload, standard or URL-safe alphabet; null when it is neither. */
+	static byte[] decodeBase64(String data) {
+		try {
+			return java.util.Base64.getDecoder().decode(data);
+		}
+		catch (IllegalArgumentException ex) {
+			try {
+				return java.util.Base64.getUrlDecoder().decode(data);
+			}
+			catch (IllegalArgumentException again) {
+				return null;
+			}
+		}
+	}
+
 	/** The given type unless it says nothing, else sniffed from the first bytes, else octet-stream. */
 	static String type(String contentType, byte[] bytes) {
 		if (contentType != null && !contentType.isBlank() && !contentType.toLowerCase(Locale.ROOT).contains("octet-stream")) {

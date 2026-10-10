@@ -377,20 +377,24 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			entry.put("url", data.toString());
 			return entry;
 		}
-		byte[] bytes = bytes(data);
-		if (bytes == null) {
-			if (data instanceof String s) {
-				entry.put("url", s);
+		InspectorClient.Media kept = keep && client != null ? client.uploaded(data) : null;
+		if (kept == null) {
+			byte[] bytes = bytes(data);
+			if (bytes == null) {
+				if (data instanceof String s) {
+					entry.put("url", s);
+				}
+				return entry;
 			}
-			return entry;
+			entry.put("size", bytes.length);
+			if (keep && client != null) {
+				kept = client.sendBlob(data, bytes, (String) entry.get("type"));
+			}
 		}
-		entry.put("size", bytes.length);
-		if (keep && client != null) {
-			InspectorClient.Media kept = client.sendBlob(data, bytes, (String) entry.get("type"));
-			if (kept != null) {
-				entry.put("type", kept.contentType());
-				entry.put("blobId", kept.id());
-			}
+		if (kept != null) {
+			entry.put("type", kept.contentType());
+			entry.put("size", kept.size());
+			entry.put("blobId", kept.id());
 		}
 		return entry;
 	}
@@ -401,12 +405,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			return bytes;
 		}
 		if (data instanceof String s && s.startsWith("data:") && s.contains(";base64,")) {
-			try {
-				return java.util.Base64.getDecoder().decode(s.substring(s.indexOf(";base64,") + 8));
-			}
-			catch (IllegalArgumentException ex) {
-				return null;
-			}
+			return InspectorMedia.decodeBase64(s.substring(s.indexOf(";base64,") + 8));
 		}
 		return null;
 	}
