@@ -27,6 +27,23 @@ not tie it to a request at this level), so parallel calls on one connection can 
 sequence lane, with the `ChatClient` call that answers a sampling request on an "MCP sampling" lane. The rest (`initialize`, `tools/list`, ...) is shown per
 connection in the **MCP connections** panel, with the server's name, version, protocol and tools.
 
+## Images, speech, transcription and moderation
+
+Non-chat calls that go through the proxy get a view of their own, recognized by the API's path whoever serves
+it: **image generation** (`/v1/images/generations`, `/edits`, `/variations`: the prompt and parameters, the
+images, the revised prompt, the usage), **text to speech** (`/v1/audio/speech`: the text and voice, the audio
+with a player), **transcription** (`/v1/audio/transcriptions`, `/translations`: the uploaded file, the
+transcript, language and duration) and **moderation** (`/v1/moderations`: each input with its verdict and
+top category scores). Images and audio sent inline in chat messages (vision, audio input) are shown in the
+message too.
+
+The media itself (inline base64 of a recognized type, binary bodies, uploaded files) is kept out of the
+events, in memory under `spring.ai.inspector.max-blob-bytes`, and served to the UI from `/api/blobs/<id>`; the
+events carry a `<base64 N chars TYPE blob:ID>` marker where the payload was. Long base64 that is not media (an
+embedding vector in base64, a signature) is cut to the marker only. Audio streamed back in small chunks (chat
+audio output) is not reassembled. Blobs are not part of exports: an imported or replayed run shows the
+markers without previews.
+
 ## RAG and memory
 
 - **Retrieval (RAG)** step (05, 05-1): the configured pipeline stages, read from the `QuestionAnswerAdvisor` /
@@ -167,6 +184,8 @@ Settings, for the inspector server:
 | `spring.ai.inspector.max-total-bytes` | `268435456` | byte budget of the in-memory event log (oldest events dropped) |
 | `spring.ai.inspector.max-request-bytes` | `16777216` | largest event post accepted |
 | `spring.ai.inspector.max-import-bytes` | `268435456` | largest recording accepted by Import |
+| `spring.ai.inspector.max-blob-bytes` | `67108864` | budget for the media kept for previews (images, audio); `0` keeps none |
+| `spring.ai.inspector.max-blob-size` | `16777216` | largest single media item kept |
 
 ## Access and what gets recorded
 
@@ -181,8 +200,8 @@ The inspector sees everything the apps send: prompts, tool results, memory files
 - To require a secret, set `spring.ai.inspector.token` on the server and in the apps. The UI gets it once from
   the address bar, `http://localhost:9001/#token=<value>`, and keeps it in the browser.
 - Secret headers (`x-api-key`, `Authorization`, cookies, ...) and query parameters (`key`, `token`, ...) are
-  recorded as `…redacted`; inline base64 (images, audio, documents) is replaced by a size marker; binary bodies
-  are recorded by type and size only.
+  recorded as `…redacted`; inline base64 (images, audio, documents) and binary bodies are replaced by a marker,
+  their bytes kept apart for previews (see above) under a budget.
 - **Exports and `preload-dir` files contain the recorded prompts, tool results and memory contents.** Treat them
   like logs.
 
@@ -207,7 +226,8 @@ spring-ai-inspector-server/src/main/resources/static/
     ├── main.js          entry point: DOM listeners, live event stream, deep links (the only module touching the DOM on load)
     ├── state.js         UI state and preferences
     ├── model.js         turns events into runs, calls, round-trips, tool runs, links
-    ├── providers.js     wire-format adapters (Anthropic, OpenAI Chat Completions and Responses, Ollama, Mistral, DeepSeek, TypeSafe)
+    ├── providers.js     wire-format adapters (Anthropic, OpenAI Chat Completions and Responses, Ollama, Mistral, DeepSeek, TypeSafe,
+    │                    embeddings, images, speech, transcription, moderation)
     ├── util.js          escaping, formatting, JSON highlighting
     ├── io.js · replay.js  export/import, replay
     └── render/          cards, wire, messages, rag, memory, sequence, page
@@ -230,7 +250,8 @@ node --test spring-ai-inspector/spring-ai-inspector-server/src/test/js/*.test.mj
 
 - Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic), OpenAI's
   Responses API (`/v1/responses`, also from OpenAI-compatible providers) and Ollama (`/api/chat`, `/api/generate`). Google GenAI and Bedrock are not proxied; those demos still show the advisor layers.
-- Other endpoints that go through the proxy, such as embeddings, are captured but shown as raw JSON only.
+- Endpoints without an adapter (anything but chat, embeddings, images, speech, transcription and moderation)
+  are captured but shown as raw JSON only.
 - A `ChatClient` built with `ChatClient.builder(chatModel)` instead of the injected builder gets no advisor
   events, but its wire traffic is still captured. It also has no observations, so tool runs and searches made
   inside it are attributed by timing rather than by the call that made them.

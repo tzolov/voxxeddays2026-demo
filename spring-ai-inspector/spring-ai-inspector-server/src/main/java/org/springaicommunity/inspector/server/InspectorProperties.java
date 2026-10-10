@@ -24,16 +24,22 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * dropped beyond it
  * @param maxRequestBytes largest event accepted on {@code /api/events}
  * @param maxImportBytes largest recording accepted on {@code /api/import}
+ * @param maxBlobBytes byte budget for the media kept out of the events (images, audio,
+ * documents sent inline or as binary bodies) so the UI can show them; the oldest are
+ * dropped beyond it, and {@code 0} keeps none
+ * @param maxBlobSize largest single media item kept
  */
 @ConfigurationProperties("spring.ai.inspector")
 public record InspectorProperties(Map<String, String> upstreams, @Nullable String preloadDir, @Nullable String token,
 		@Nullable List<String> allowedHosts, @DefaultValue("512000") int maxBodyChars,
 		@DefaultValue("268435456") long maxTotalBytes, @DefaultValue("16777216") long maxRequestBytes,
-		@DefaultValue("268435456") long maxImportBytes) {
+		@DefaultValue("268435456") long maxImportBytes, @DefaultValue("67108864") long maxBlobBytes,
+		@DefaultValue("16777216") int maxBlobSize) {
 
 	/** The defaults, for code paths that have no bound properties (tests). */
 	static InspectorProperties defaults() {
-		return new InspectorProperties(Map.of(), null, null, null, 512_000, 268_435_456L, 16_777_216L, 268_435_456L);
+		return new InspectorProperties(Map.of(), null, null, null, 512_000, 268_435_456L, 16_777_216L, 268_435_456L,
+				67_108_864L, 16_777_216);
 	}
 
 	/** Whether a token is configured. */

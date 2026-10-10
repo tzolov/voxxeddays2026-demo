@@ -11,9 +11,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,13 +25,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Recording reverse proxy (a built-in replacement for mitmweb). Demos call
  * {@code /r/<runId>/<provider>/v1/...}; the request is forwarded to the provider's
- * upstream, the response is streamed back unchanged, and both are published as
- * {@code wire-request} / {@code wire-response} events, shaped by {@link WireCapture}:
- * secrets redacted, inline base64 stripped, bodies capped, binary bodies by size only.
- *
- * <p>Each round-trip is linked to the ChatClient call and the model call it serves by the
- * {@code X-Inspector-Call} / {@code X-Inspector-Model-Call} headers the starter stamps on
- * the request (stripped here), falling back to the calls open for the run at that moment.
+ * upstream and the response is streamed back unchanged. What is recorded of both, and how
+ * it is linked to the calls it serves, is {@link WireRecorder}'s business: this class only
+ * decides where to forward and moves the bytes.
  *
  * <p>The upstream is the base URL the application originally had for that provider (the
  * starter reports it in {@code run-start}, so custom gateways keep working), falling back
@@ -44,14 +40,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class ProxyController {
 
-	/** Stamped by the starter on each model request: the ChatClient call and model call it serves. */
-	static final String CALL_HEADER = "x-inspector-call";
-
-	static final String MODEL_CALL_HEADER = "x-inspector-model-call";
-
 	private static final Set<String> SKIP_REQUEST_HEADERS = Set.of("host", "content-length", "connection",
 			"accept-encoding", "transfer-encoding", "expect", "upgrade", "keep-alive", "te", "trailer",
-			"http2-settings", CALL_HEADER, MODEL_CALL_HEADER);
+			"http2-settings", WireRecorder.CALL_HEADER, WireRecorder.MODEL_CALL_HEADER);
 
 	private static final Set<String> SKIP_RESPONSE_HEADERS = Set.of("content-length", "connection",
 			"transfer-encoding", "keep-alive", ":status");
@@ -63,17 +54,17 @@ public class ProxyController {
 
 	private final EventStore store;
 
+	private final WireRecorder recorder;
+
 	private final Map<String, String> upstreams;
 
 	private final boolean registeredRunsOnly;
 
-	private final WireCapture capture;
-
-	public ProxyController(EventStore store, InspectorProperties properties) {
+	public ProxyController(EventStore store, WireRecorder recorder, InspectorProperties properties) {
 		this.store = store;
+		this.recorder = recorder;
 		this.upstreams = properties.upstreams() == null ? Map.of() : properties.upstreams();
 		this.registeredRunsOnly = properties.hasToken();
-		this.capture = new WireCapture(properties.maxBodyChars());
 	}
 
 	@RequestMapping("/r/{runId}/{provider}/**")
@@ -100,75 +91,43 @@ public class ProxyController {
 			.timeout(Duration.ofMinutes(10))
 			.method(request.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofByteArray(body));
-
-		Map<String, Object> requestHeaders = new LinkedHashMap<>();
+		Map<String, List<String>> forwardedHeaders = new LinkedHashMap<>();
 		for (String name : Collections.list(request.getHeaderNames())) {
 			if (SKIP_REQUEST_HEADERS.contains(name.toLowerCase())) {
 				continue;
 			}
-			for (String value : Collections.list(request.getHeaders(name))) {
-				upstreamRequest.header(name, value);
-			}
-			requestHeaders.put(name, WireCapture.redactHeader(name, request.getHeader(name)));
+			List<String> values = Collections.list(request.getHeaders(name));
+			values.forEach(value -> upstreamRequest.header(name, value));
+			forwardedHeaders.put(name, values);
 		}
-
-		String wireId = UUID.randomUUID().toString().substring(0, 8);
-		String shownQuery = WireCapture.redactQuery(request.getQueryString());
-		Map<String, Object> wireRequest = new LinkedHashMap<>();
-		wireRequest.put("type", "wire-request");
-		wireRequest.put("runId", runId);
-		wireRequest.put("wireId", wireId);
-		wireRequest.put("provider", provider);
-		wireRequest.put("method", request.getMethod());
-		wireRequest.put("url", upstream + path + shownQuery);
-		wireRequest.put("path", path);
-		wireRequest.put("headers", requestHeaders);
-		this.capture.body(wireRequest, body, request.getContentType(), request.getHeader("content-encoding"));
-		// The call this round-trip serves: from the starter's headers, else the call open for
-		// the run right now (an app without the headers, e.g. an SDK streaming on its own threads).
-		Map<String, Object> open = this.store.openCalls(runId);
-		String call = request.getHeader(CALL_HEADER);
-		String modelCall = request.getHeader(MODEL_CALL_HEADER);
-		wireRequest.put("clientCallId", call != null ? call : open.get("clientCallId"));
-		wireRequest.put("modelCallId", modelCall != null ? modelCall : open.get("modelCallId"));
-		if (call != null || modelCall != null) {
-			wireRequest.put("linkedBy", "header");
-		}
-		this.store.add(wireRequest);
+		String wireId = this.recorder.request(runId, provider, request, upstream, path, forwardedHeaders, body);
 
 		long start = System.currentTimeMillis();
-		Map<String, Object> wireResponse = new LinkedHashMap<>();
-		wireResponse.put("type", "wire-response");
-		wireResponse.put("runId", runId);
-		wireResponse.put("wireId", wireId);
-
 		HttpResponse<InputStream> upstreamResponse;
 		try {
 			upstreamResponse = this.httpClient.send(upstreamRequest.build(), HttpResponse.BodyHandlers.ofInputStream());
 		}
 		catch (Exception ex) {
-			wireResponse.put("status", 502);
-			wireResponse.put("error", ex.getClass().getSimpleName() + ": " + ex.getMessage());
-			wireResponse.put("durationMs", System.currentTimeMillis() - start);
-			this.store.add(wireResponse);
+			this.recorder.failure(runId, wireId, ex, System.currentTimeMillis() - start);
 			response.sendError(502, "Spring AI Inspector could not reach " + upstream + ": " + ex.getMessage());
 			return;
 		}
 
 		response.setStatus(upstreamResponse.statusCode());
-		Map<String, Object> responseHeaders = new LinkedHashMap<>();
+		Map<String, List<String>> responseHeaders = new LinkedHashMap<>();
 		upstreamResponse.headers().map().forEach((name, values) -> {
 			if (SKIP_RESPONSE_HEADERS.contains(name.toLowerCase())) {
 				return;
 			}
 			values.forEach(value -> response.addHeader(name, value));
-			responseHeaders.put(name, WireCapture.redactHeader(name, String.join(", ", values)));
+			responseHeaders.put(name, values);
 		});
 
 		// Stream through chunk by chunk (keeps SSE streaming responses live) and keep a copy.
-		// The wire-response is published in any case, so a broken stream never leaves the
+		// The wire-response is recorded in any case, so a broken stream never leaves the
 		// round-trip "waiting" in the UI.
 		ByteArrayOutputStream copy = new ByteArrayOutputStream();
+		String error = null;
 		try (InputStream in = upstreamResponse.body()) {
 			OutputStream out = response.getOutputStream();
 			byte[] buffer = new byte[8192];
@@ -180,17 +139,12 @@ public class ProxyController {
 			}
 		}
 		catch (IOException ex) {
-			wireResponse.put("error", "stream interrupted: " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
+			error = "stream interrupted: " + ex.getClass().getSimpleName() + ": " + ex.getMessage();
 			throw ex;
 		}
 		finally {
-			wireResponse.put("status", upstreamResponse.statusCode());
-			wireResponse.put("durationMs", System.currentTimeMillis() - start);
-			wireResponse.put("headers", responseHeaders);
-			this.capture.body(wireResponse, copy.toByteArray(),
-					upstreamResponse.headers().firstValue("content-type").orElse(null),
-					upstreamResponse.headers().firstValue("content-encoding").orElse(null));
-			this.store.add(wireResponse);
+			this.recorder.response(runId, wireId, upstreamResponse.statusCode(), responseHeaders, copy.toByteArray(),
+					System.currentTimeMillis() - start, error);
 		}
 	}
 

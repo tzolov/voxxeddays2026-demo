@@ -161,10 +161,21 @@ class ProxyControllerTest {
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).startsWith("ID3"); // the client got the audio itself, unchanged
 		Map<String, Object> wireRequest = events("wire-request").get(0);
+		// Stripped to a marker; not kept, since nothing recognizable is sniffed in it.
 		assertThat(wireRequest.get("body").toString()).contains("<base64 5000 chars>").doesNotContain(image);
 		Map<String, Object> wireResponse = events("wire-response").get(0);
 		assertThat(wireResponse).containsEntry("bodyKind", "binary").containsEntry("contentType", "audio/mpeg")
 			.containsEntry("size", 7).doesNotContainKey("body");
+		// The bytes are kept, and served to the UI as what they are, never as a page.
+		HttpResponse<byte[]> blob = this.http.send(HttpRequest.newBuilder(
+				URI.create("http://localhost:" + this.port + "/api/blobs/" + wireResponse.get("blobId"))).build(),
+				HttpResponse.BodyHandlers.ofByteArray());
+		assertThat(blob.statusCode()).isEqualTo(200);
+		assertThat(blob.headers().firstValue("content-type")).hasValue("audio/mpeg");
+		assertThat(blob.headers().firstValue("content-security-policy")).hasValue("sandbox");
+		assertThat(blob.body()).startsWith("ID3".getBytes(StandardCharsets.UTF_8));
+		assertThat(this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs/nope")).build(),
+				HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(404);
 	}
 
 	@Test

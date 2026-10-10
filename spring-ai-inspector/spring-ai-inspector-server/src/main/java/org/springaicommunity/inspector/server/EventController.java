@@ -18,8 +18,11 @@ public class EventController {
 
 	private final EventStore store;
 
-	public EventController(EventStore store) {
+	private final BlobStore blobs;
+
+	public EventController(EventStore store, BlobStore blobs) {
 		this.store = store;
+		this.blobs = blobs;
 	}
 
 	/** Signature the starter looks for before routing an application's traffic here. */
@@ -55,6 +58,7 @@ public class EventController {
 	@DeleteMapping("/events")
 	public void clear() {
 		this.store.clear();
+		this.blobs.clear();
 	}
 
 }

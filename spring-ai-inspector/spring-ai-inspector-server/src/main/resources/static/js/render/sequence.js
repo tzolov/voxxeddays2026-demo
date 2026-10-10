@@ -1,4 +1,4 @@
-import { inputCount, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
+import { adapterOf, inputCount, normRequest, normResponse, providerLabel, usageOf } from '../providers.js';
 import { fmtCompact, wireModelKey } from './tokens.js';
 import { embeddingTotals, foldKey, foldKind, isJevWire } from './cards.js';
 import { mcpName, mcpSummary } from './mcp.js';
@@ -52,6 +52,10 @@ export function buildSequence(run) {
 		const r = normResponse(w);
 		if (r?.answers) return systemOneHighlights(r).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'answers';
 		if (r?.vectors != null) return `${r.vectors} vector${r.vectors === 1 ? '' : 's'} · ${fmtMs(w.resp.durationMs)}`;
+		if (r?.images) return `${r.images.length} image${r.images.length === 1 ? '' : 's'} · ${fmtMs(w.resp.durationMs)}`;
+		if (r?.audio) return `audio · ${fmtMs(w.resp.durationMs)}`;
+		if (r?.results) return `${r.results.some((x) => x.flagged) ? 'flagged' : 'ok'} · ${fmtMs(w.resp.durationMs)}`;
+		if (r?.text != null && !r.blocks?.length) return `${oneLine(r.text, 30)} · ${fmtMs(w.resp.durationMs)}`;
 		const tools = (r?.blocks || []).filter((b) => b.type === 'tool_use').map((b) => b.name);
 		return `${tools.length ? 'tool_use ' + tools.join(', ') : (r?.stop || 'response')} · ${fmtMs(w.resp.durationMs)}`;
 	}
@@ -105,10 +109,12 @@ export function buildSequence(run) {
 			const it = items[i++];
 			if (it.kind === 'wire') {
 				const w = it.ref; const to = wireLane(r, w); const req = normRequest(w);
+				const special = adapterOf(w)?.kind;
 				addTokens(to, w);
 				const kind = to.includes('|jev|') ? 'jev' : 'model';
 				const label = kind === 'jev' ? `systemOne · ${Object.keys(req?.questions || {}).length} questions`
 					: isEmbeddingWire(it) ? `#${w.num} · embed ${inputCount(req) ?? '?'} input${inputCount(req) === 1 ? '' : 's'}${w.inProcess ? ' · no HTTP' : ''}`
+					: special && special !== 'systemone' ? `#${w.num} · ${special}`
 					: `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
 				const src = sourceOf(w);
 				const wpath = [...pathOf(w), 'wire:' + w.id];

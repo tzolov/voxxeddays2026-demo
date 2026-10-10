@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 
 import { state } from '../../main/resources/static/js/state.js';
 import { handle } from '../../main/resources/static/js/model.js';
-import { ADAPTERS, adapterOf, anthropicBlock, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
+import { ADAPTERS, adapterOf, anthropicBlock, blobMarker, mediaOf, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
 import { runTotals } from '../../main/resources/static/js/render/page.js';
@@ -17,7 +17,7 @@ import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
 import { indentJson, prettyMaybeJson } from '../../main/resources/static/js/util.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
-import { noulLeaning, renderBlock, renderNormRequest, renderRawBody, renderWire } from '../../main/resources/static/js/render/wire.js';
+import { noulLeaning, renderBlock, renderMedia, renderNormRequest, renderRawBody, renderWire } from '../../main/resources/static/js/render/wire.js';
 import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url)));
@@ -1018,4 +1018,106 @@ test('a vector store delete is shown as an operation of its own, with its ids or
 	handle({ type: 'vector-start', runId: 'd', opId: 'o2', op: 'delete', clientCallId: 'c1', store: 'SimpleVectorStore', filter: "source == 'old'", seq: 4, ts: 8 });
 	assert.match(renderCall(state.runs.get('d').calls.get('c1'), true), /delete by filter source == &#39;old&#39;/);
 	assert.match(renderSequence(state.runs.get('d'), false), /delete by filter/);
+});
+
+// ---------------------------------------------------------------- images, speech, transcription, moderation
+/** A run with one round-trip of the given shape, returning the wire. */
+function wireOf(provider, path, reqExtra, respExtra) {
+	state.runs.clear();
+	const runId = 'w-' + Math.random().toString(36).slice(2, 7);
+	handle({ type: 'run-start', runId, app: 'media', ts: 1 });
+	handle({ type: 'wire-request', runId, wireId: 'w1', provider, method: 'POST', path, url: 'https://api.example' + path, headers: {}, seq: 1, ts: 2, ...reqExtra });
+	if (respExtra) handle({ type: 'wire-response', runId, wireId: 'w1', status: 200, durationMs: 800, headers: { 'content-type': 'application/json' }, seq: 2, ts: 900, ...respExtra });
+	return state.runs.get(runId).wires.get('w1');
+}
+
+test('media markers: kept blobs, provider URLs and stripped payloads are told apart and rendered safely', () => {
+	assert.deepEqual(blobMarker('<base64 2000 chars image/png blob:0123456789abcdef>'), { chars: 2000, type: 'image/png', blobId: '0123456789abcdef' });
+	assert.deepEqual(blobMarker('<base64 2000 chars>'), { chars: 2000, type: '', blobId: null });
+	assert.equal(blobMarker('plain text'), null);
+	assert.deepEqual(mediaOf('https://cdn.example/a.png'), { url: 'https://cdn.example/a.png', type: '' });
+	const img = renderMedia({ blobId: 'abc', type: 'image/png', chars: 2000 });
+	assert.match(img, /<img class="media" src="api\/blobs\/abc"/);
+	assert.match(renderMedia({ blobId: 'abc', type: 'audio/mpeg', size: 70521 }), /<audio class="media" controls[^>]*src="api\/blobs\/abc"/);
+	assert.match(renderMedia({ chars: 2000, type: 'image/png' }), /not kept/);
+	assert.match(renderMedia({ url: 'https://x.example/<script>' }), /&lt;script&gt;/);
+	assert.doesNotMatch(renderMedia({ url: 'https://x.example/<script>' }), /<script>/);
+	// A chat message with an inline image shows it.
+	const block = anthropicBlock({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '<base64 9000 chars image/jpeg blob:feedfeedfeedfeed>' } });
+	assert.equal(block.media.blobId, 'feedfeedfeedfeed');
+	assert.match(renderBlock(block), /api\/blobs\/feedfeedfeedfeed/);
+});
+
+test('image generation: prompt and parameters in, images out, with usage where the model reports it', () => {
+	const w = wireOf('openai', '/v1/images/generations', { body: JSON.stringify({ model: 'gpt-image-1', prompt: 'a lighthouse at dusk', n: 2, size: '1024x1024' }) },
+		{ body: JSON.stringify({ created: 1, data: [{ b64_json: '<base64 400000 chars image/png blob:1111111111111111>', revised_prompt: 'A lighthouse at dusk, oil painting' }, { url: 'https://cdn.example/img2.png' }], usage: { input_tokens: 12, output_tokens: 1056 } }) });
+	assert.equal(adapterOf(w).kind, 'image');
+	assert.equal(normRequest(w).prompt, 'a lighthouse at dusk');
+	assert.equal(normResponse(w).images.length, 2);
+	assert.deepEqual(usageOf(w), { input: 12, output: 1056 });
+	const html = renderWire(w);
+	assert.match(html, /gpt-image-1/);
+	assert.match(html, /2 images/);
+	assert.match(html, /api\/blobs\/1111111111111111/);
+	assert.match(html, /cdn\.example\/img2\.png/);
+	assert.match(html, /revised prompt/);
+	assert.match(html, /data-tab="conv">Image</);
+	assert.match(renderSequence(state.runs.get(w.req.runId), false), /image/);
+});
+
+test('speech: the text and voice in, an audio player out when the bytes were kept', () => {
+	const w = wireOf('openai', '/v1/audio/speech', { body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: 'alloy', input: 'Welcome to Voxxed Days' }) },
+		{ bodyKind: 'binary', contentType: 'audio/mpeg', size: 70521, blobId: '2222222222222222', headers: { 'content-type': 'audio/mpeg' } });
+	assert.equal(adapterOf(w).kind, 'speech');
+	assert.equal(normResponse(w).audio.blobId, '2222222222222222');
+	const html = renderWire(w);
+	assert.match(html, /alloy/);
+	assert.match(html, /audio · 68\.9 KB/);
+	assert.match(html, /<audio class="media" controls[^>]*api\/blobs\/2222222222222222/);
+	// Not kept (an imported recording): said so, no broken player.
+	const gone = wireOf('openai', '/v1/audio/speech', { body: JSON.stringify({ model: 'tts-1', voice: 'nova', input: 'hi' }) },
+		{ bodyKind: 'binary', contentType: 'audio/mpeg', size: 10 });
+	assert.match(renderWire(gone), /not kept/);
+});
+
+test('transcription: the multipart request shows its fields and file, the response its text', () => {
+	const w = wireOf('openai', '/v1/audio/transcriptions',
+		{ bodyKind: 'multipart', body: JSON.stringify({ fields: { model: 'whisper-1', language: 'en' }, files: [{ name: 'file', filename: 'question.wav', contentType: 'audio/wav', size: 48000, blobId: '3333333333333333' }] }) },
+		{ body: JSON.stringify({ text: 'What is the weather in Antwerp?', language: 'english', duration: 2.4 }) });
+	assert.equal(adapterOf(w).kind, 'transcription');
+	assert.equal(normRequest(w).params.model, 'whisper-1');
+	assert.equal(normResponse(w).text, 'What is the weather in Antwerp?');
+	const html = renderWire(w);
+	assert.match(html, /question\.wav/);
+	assert.match(html, /api\/blobs\/3333333333333333/);
+	assert.match(html, /What is the weather in Antwerp\?/);
+	assert.match(html, /duration: <b>2\.4 s/);
+	// Plain-text responses (response_format=text) are the transcript as is.
+	const plain = wireOf('openai', '/v1/audio/transcriptions', { bodyKind: 'multipart', body: JSON.stringify({ fields: { model: 'whisper-1' }, files: [] }) },
+		{ body: 'Just text.', headers: { 'content-type': 'text/plain' } });
+	assert.equal(normResponse(plain).text, 'Just text.');
+});
+
+test('moderation: each input with its verdict and top category scores', () => {
+	const w = wireOf('openai', '/v1/moderations', { body: JSON.stringify({ model: 'omni-moderation-latest', input: ['hello there', 'I will hurt you'] }) },
+		{ body: JSON.stringify({ model: 'omni-moderation-latest', results: [
+			{ flagged: false, categories: { violence: false }, category_scores: { violence: 0.001 } },
+			{ flagged: true, categories: { violence: true, harassment: true, hate: false }, category_scores: { violence: 0.92, harassment: 0.71, hate: 0.02 } }] }) });
+	assert.equal(adapterOf(w).kind, 'moderation');
+	assert.deepEqual(normResponse(w).results[1].flaggedCategories, ['violence', 'harassment']);
+	const html = renderWire(w);
+	assert.match(html, /flagged · violence, harassment/);
+	assert.match(html, /I will hurt you/);
+	assert.match(html, /0\.92/);
+	assert.match(renderSequence(state.runs.get(w.req.runId), false), /flagged/);
+});
+
+test('an image a tool returned is shown in its tool result', () => {
+	const block = anthropicBlock({ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'the chart' },
+		{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '<base64 30000 chars image/png blob:abcdabcdabcdabcd>' } }] });
+	assert.equal(block.content, 'the chart\n[image]');
+	assert.equal(block.media[0].blobId, 'abcdabcdabcdabcd');
+	const html = renderBlock(block);
+	assert.match(html, /the chart/);
+	assert.match(html, /<img class="media" src="api\/blobs\/abcdabcdabcdabcd"/);
 });

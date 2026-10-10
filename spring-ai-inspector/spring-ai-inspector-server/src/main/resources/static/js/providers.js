@@ -15,15 +15,37 @@ export const asArgs = (a) => typeof a === 'string' ? (parseJson(a) ?? a) : (a ??
 export const sseData = (body) => body.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim())
 	.filter((d) => d && d !== '[DONE]').map(parseJson).filter(Boolean);
 
+// ---------------------------------------------------------------- media
+// The inspector replaces inline base64 (images, audio, documents) by a `<base64 N chars[ TYPE][ blob:ID]>`
+// marker and keeps the bytes as a blob when it can; binary bodies and multipart file parts carry a blobId
+// too. A media value in the normalized shape: { blobId, type, size } (kept), { url } (a link the provider
+// sent), or { chars, type } (stripped, not kept: e.g. an imported recording).
+export const blobMarker = (s) => {
+	const m = typeof s === 'string' && /^<base64 (\d+) chars(?: ([\w.+-]+\/[\w.+-]+))?(?: blob:([a-z0-9]+))?>$/.exec(s);
+	return m ? { chars: Number(m[1]), type: m[2] || '', blobId: m[3] || null } : null;
+};
+export const mediaOf = (value, type) => {
+	const marker = blobMarker(value);
+	if (marker) return { ...marker, type: marker.type || type || '' };
+	if (typeof value === 'string' && /^https?:\/\//.test(value)) return { url: value, type: type || '' };
+	return null;
+};
+
 export const anthropicBlock = (b) => {
 	switch (b.type) {
 		case 'text': return { type: 'text', text: b.text, note: b.cache_control ? 'cache_control' : '' };
 		case 'tool_use': case 'server_tool_use': return { type: 'tool_use', id: b.id, name: b.name, input: b.input };
-		case 'tool_result': return { type: 'tool_result', id: b.tool_use_id, isError: b.is_error,
-			content: typeof b.content === 'string' ? b.content : (b.content || []).map((x) => x.text ?? JSON.stringify(x)).join('\n') };
+		case 'tool_result': { // text, and images or documents a tool returned (e.g. an MCP image tool)
+			const parts = typeof b.content === 'string' ? [{ type: 'text', text: b.content }] : (b.content || []);
+			const isMedia = (x) => x.type === 'image' || x.type === 'document';
+			return { type: 'tool_result', id: b.tool_use_id, isError: b.is_error,
+				content: parts.map((x) => isMedia(x) ? `[${x.type}]` : x.text ?? JSON.stringify(x)).join('\n'),
+				media: parts.filter(isMedia).map((x) => mediaOf(x.source?.data ?? x.source?.url, x.source?.media_type)).filter(Boolean) };
+		}
 		case 'thinking': return { type: 'thinking', text: b.thinking, signed: !!b.signature };
 		case 'redacted_thinking': return { type: 'thinking', text: '', redacted: true };
-		case 'image': case 'document': return { type: 'media', label: b.type + ' · ' + (b.source?.media_type || b.source?.type || '') };
+		case 'image': case 'document': return { type: 'media', label: b.type + ' · ' + (b.source?.media_type || b.source?.type || ''),
+			media: mediaOf(b.source?.data ?? b.source?.url, b.source?.media_type) };
 		default: return { type: 'raw', label: b.type, value: b };
 	}
 };
@@ -33,6 +55,9 @@ export const openAiParts = (content) => typeof content === 'string' ? [{ type: '
 	: (content || []).map((p) => p.type === 'text' ? { type: 'text', text: p.text }
 		: p.type === 'refusal' ? { type: 'text', text: '⛔ refusal: ' + p.refusal }
 		: p.type === 'thinking' ? { type: 'thinking', text: (p.thinking || []).map((t) => t.text ?? '').join('') } // Mistral reasoning
+		: p.type === 'image_url' ? { type: 'media', label: 'image_url', media: mediaOf(p.image_url?.url) }
+		: p.type === 'input_audio' ? { type: 'media', label: 'input_audio · ' + (p.input_audio?.format || ''), media: mediaOf(p.input_audio?.data, p.input_audio?.format ? 'audio/' + p.input_audio.format : '') }
+		: p.type === 'file' ? { type: 'media', label: 'file · ' + (p.file?.filename || ''), media: mediaOf(p.file?.file_data) }
 		: { type: 'media', label: p.type });
 export const openAiToolCalls = (calls) => (calls || []).map((tc) => ({ type: 'tool_use', id: tc.id, name: tc.function?.name, input: asArgs(tc.function?.arguments) }));
 export const openAiTools = (tools) => (tools || []).map((t) => ({ name: t.function?.name || t.name || t.type, def: t }));
@@ -136,7 +161,7 @@ export const ADAPTERS = {
 					role: m.role,
 					blocks: m.role === 'tool' ? [{ type: 'tool_result', name: m.tool_name, content: m.content }]
 						: [...(m.thinking ? [{ type: 'thinking', text: m.thinking }] : []), ...(m.content ? [{ type: 'text', text: m.content }] : []),
-							...(m.images || []).map(() => ({ type: 'media', label: 'image' })), ...openAiToolCalls(m.tool_calls)],
+							...(m.images || []).map((img) => ({ type: 'media', label: 'image', media: mediaOf(img) })), ...openAiToolCalls(m.tool_calls)],
 					raw: m,
 				})),
 		}),
@@ -168,6 +193,7 @@ ADAPTERS.deepseek = ADAPTERS.openai;
 const responsesText = (content) => typeof content === 'string' ? [{ type: 'text', text: content }]
 	: (content || []).map((p) => /^(input|output)_text$/.test(p.type) ? { type: 'text', text: p.text }
 		: p.type === 'refusal' ? { type: 'text', text: '⛔ refusal: ' + p.refusal }
+		: p.type === 'input_image' ? { type: 'media', label: p.type, media: mediaOf(p.image_url) }
 		: { type: 'media', label: p.type });
 const responsesItem = (it, names = {}) => {
 	switch (it.type) {
@@ -288,6 +314,83 @@ export const EMBEDDINGS = {
 	},
 };
 
+// Image generation (OpenAI-style /v1/images/*): the prompt and parameters in, the images out (a URL,
+// or base64 the inspector kept as a blob). /edits and /variations are multipart: fields and file parts.
+export const IMAGES = {
+	kind: 'image',
+	matches: (path) => /\/v1\/images\/(generations|edits|variations)$/.test(path),
+	request: (req) => {
+		const f = req.fields ?? req;
+		return { params: pick(f, ['model', 'n', 'size', 'quality', 'style', 'response_format', 'background', 'output_format']),
+			prompt: f.prompt, files: req.files || [], system: null, tools: [], messages: [] };
+	},
+	response: (body) => {
+		const json = parseJson(body);
+		if (!json) return null;
+		if (json.error) return { error: `${json.error.type || json.error.code || 'error'}: ${json.error.message}` };
+		const u = json.usage || {};
+		return { images: (json.data || []).map((d) => ({ media: mediaOf(d.b64_json ?? d.url), revisedPrompt: d.revised_prompt })),
+			blocks: [], usage: u.input_tokens != null ? { input: u.input_tokens, output: u.output_tokens } : null };
+	},
+};
+
+// Text to speech (/v1/audio/speech): the text and voice in, audio bytes out (kept as a blob).
+export const SPEECH = {
+	kind: 'speech',
+	matches: (path) => /\/v1\/audio\/speech$/.test(path),
+	request: (req) => ({ params: pick(req, ['model', 'voice', 'response_format', 'speed', 'instructions']), text: req.input,
+		system: null, tools: [], messages: [] }),
+	binary: (resp) => ({ audio: { blobId: resp.blobId || null, type: resp.contentType || '', size: resp.size }, blocks: [], usage: null }),
+	response: (body) => {
+		const json = parseJson(body);
+		return json?.error ? { error: `${json.error.type || json.error.code || 'error'}: ${json.error.message}` } : { blocks: [], usage: null };
+	},
+};
+
+// Transcription and translation (/v1/audio/transcriptions, /translations): a multipart request with the
+// audio file and the parameters; JSON (text, language, duration, segments) or plain text out.
+export const TRANSCRIPTIONS = {
+	kind: 'transcription',
+	matches: (path) => /\/v1\/audio\/(transcriptions|translations)$/.test(path),
+	request: (req) => {
+		const f = req.fields ?? req;
+		return { params: pick(f, ['model', 'language', 'response_format', 'temperature', 'prompt', 'timestamp_granularities[]']),
+			files: req.files || [], system: null, tools: [], messages: [] };
+	},
+	response: (body) => {
+		const json = parseJson(body);
+		if (json?.error) return { error: `${json.error.type || json.error.code || 'error'}: ${json.error.message}` };
+		if (json && typeof json === 'object') {
+			const u = json.usage || {};
+			return { text: json.text ?? '', language: json.language, duration: json.duration, segments: json.segments?.length, blocks: [],
+				usage: u.input_tokens != null ? { input: u.input_tokens, output: u.output_tokens ?? 0 } : u.seconds != null ? { input: 0, output: 0, seconds: u.seconds } : null };
+		}
+		return { text: body ?? '', blocks: [], usage: null }; // text, srt, vtt
+	},
+};
+
+// Moderation (/v1/moderations): the inputs in, per input whether it was flagged and the category scores.
+export const MODERATIONS = {
+	kind: 'moderation',
+	matches: (path) => /\/v1\/moderations$/.test(path),
+	request: (req) => ({ params: pick(req, ['model']),
+		inputs: (Array.isArray(req.input) ? req.input : [req.input]).map((i) => typeof i === 'string' ? { type: 'text', text: i }
+			: i?.type === 'image_url' ? { type: 'media', label: 'image_url', media: mediaOf(i.image_url?.url) } : { type: 'text', text: i?.text ?? JSON.stringify(i) }),
+		system: null, tools: [], messages: [] }),
+	response: (body) => {
+		const json = parseJson(body);
+		if (!json) return null;
+		if (json.error) return { error: `${json.error.type || json.error.code || 'error'}: ${json.error.message}` };
+		return { model: json.model, blocks: [], usage: null,
+			results: (json.results || []).map((r) => ({ flagged: !!r.flagged,
+				flaggedCategories: Object.entries(r.categories || {}).filter(([, v]) => v).map(([k]) => k),
+				scores: r.category_scores || {} })) };
+	},
+};
+
+/** The adapters recognized by the API's path, whatever provider is routed. */
+export const BY_PATH = [IMAGES, SPEECH, TRANSCRIPTIONS, MODERATIONS];
+
 /** How many texts an embedding request embeds (an in-process one only carries a sample of them). */
 export const inputCount = (nreq) => nreq?.total ?? nreq?.inputs.length;
 
@@ -298,6 +401,9 @@ export function adapterOf(wire) {
 	if (EMBEDDINGS.matches(path) && (EMBEDDINGS.providers.has(provider) || !a)) return EMBEDDINGS;
 	// OpenAI's Responses API, also served by OpenAI-compatible providers next to Chat Completions.
 	if (RESPONSES.matches(path)) return RESPONSES;
+	// Images, speech, transcription, moderation: by the API's path, whoever serves it.
+	const special = BY_PATH.find((x) => x.matches(path));
+	if (special) return special;
 	// A provider routed by a name of its own (spring.ai.inspector.proxy.<name>): recognized by its API's path.
 	return a ? null : [...new Set(Object.values(ADAPTERS))].find((x) => x.matches(path)) ?? null;
 }
@@ -315,6 +421,7 @@ export function normResponse(wire) {
 	if (wire._nresp === undefined) {
 		const a = adapterOf(wire);
 		if (wire.resp.error) wire._nresp = { error: wire.resp.error };
+		else if (a && wire.resp.bodyKind === 'binary') wire._nresp = a.binary ? a.binary(wire.resp) : null; // e.g. audio out
 		else if (!a || wire.resp.body == null) wire._nresp = null;
 		else {
 			const ct = String((wire.resp.headers && (wire.resp.headers['content-type'] || wire.resp.headers['Content-Type'])) || '');

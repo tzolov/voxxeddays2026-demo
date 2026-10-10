@@ -1,6 +1,6 @@
 import { adapterOf, inputCount, normRequest, normResponse, providerLabel } from '../providers.js';
 import { hash, renderFoldedMessage, renderSystemMessage } from './messages.js';
-import { state } from '../state.js';
+import { apiUrl, state } from '../state.js';
 import { wireModelKey } from './tokens.js';
 import { esc, fmtMs, fmtNum, highlightJson, isOpen, oneLine, prettyMaybeJson, renderText } from '../util.js';
 
@@ -14,7 +14,7 @@ export function renderBlock(b) {
 		case 'tool_use':
 			return `<div class="block tool-use"><div class="block-label">tool call${b.id ? ' · ' + esc(b.id) : ''}</div><span class="fn">${esc(b.name)}</span><pre>${highlightJson(b.input ?? {})}</pre></div>`;
 		case 'tool_result':
-			return `<div class="block tool-result"><div class="block-label">tool result${b.name ? ' · <span class="fn">' + esc(b.name) + '</span>' : ''}${b.id ? ' · ' + esc(b.id) : ''}${b.isError ? ' · error' : ''}</div><pre>${prettyMaybeJson(b.content)}</pre></div>`;
+			return `<div class="block tool-result"><div class="block-label">tool result${b.name ? ' · <span class="fn">' + esc(b.name) + '</span>' : ''}${b.id ? ' · ' + esc(b.id) : ''}${b.isError ? ' · error' : ''}</div><pre>${prettyMaybeJson(b.content)}</pre>${(b.media || []).map(renderMedia).join('')}</div>`;
 		case 'thinking': {
 			if (b.text) return `<div class="block"><div class="block-label">thinking</div><div class="text">${esc(b.text)}</div></div>`;
 			// Reasoning not returned: the block only carries what the model needs to resume it.
@@ -25,10 +25,34 @@ export function renderBlock(b) {
 			return `<div class="block" title="${esc(why)}"><div class="block-label">thinking · ${label}</div></div>`;
 		}
 		case 'media':
-			return `<div class="block"><div class="block-label">media</div>${esc(b.label)}</div>`;
+			return `<div class="block media"><div class="block-label">media · ${esc(b.label)}</div>${renderMedia(b.media)}</div>`;
 		default:
 			return `<div class="block"><div class="block-label">${esc(b.label)}</div><pre>${highlightJson(b.value)}</pre></div>`;
 	}
+}
+
+const fmtBytes = (n) => n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+/**
+ * A media value (see providers.js): the image or the audio player when the inspector kept the bytes,
+ * a link when the provider sent a URL, else what was there. A kept blob is gone after a restart
+ * (blobs are not exported): the image then says so instead of breaking.
+ */
+export function renderMedia(media) {
+	if (!media) return '';
+	if (media.blobId) {
+		const src = apiUrl('api/blobs/' + encodeURIComponent(media.blobId));
+		const type = media.type || '';
+		const size = media.size != null ? ` · ${fmtBytes(media.size)}` : media.chars != null ? ` · ${fmtNum(media.chars)} chars` : '';
+		if (type.startsWith('image/')) return `<a class="media-link" href="${esc(src)}" target="_blank"><img class="media" src="${esc(src)}" alt="${esc(type)}" onerror="this.classList.add('gone')"><span class="media-gone tag muted">preview no longer available</span></a><span class="tag muted">${esc(type)}${size}</span>`;
+		if (type.startsWith('audio/')) return `<audio class="media" controls preload="none" src="${esc(src)}"></audio><span class="tag muted">${esc(type)}${size}</span>`;
+		return `<a class="tag" href="${esc(src)}" target="_blank" download>${esc(type || 'file')}${size}</a>`;
+	}
+	if (media.url) {
+		const img = /\.(png|jpe?g|gif|webp)(\?|$)/i.test(media.url) || (media.type || '').startsWith('image/');
+		return `<a class="media-link" href="${esc(media.url)}" target="_blank">${img ? `<img class="media" src="${esc(media.url)}" alt="" onerror="this.classList.add('gone')"><span class="media-gone tag muted">image not reachable</span>` : esc(oneLine(media.url, 80))}</a>`;
+	}
+	return `<span class="tag muted">${esc(media.type || 'base64')} · ${fmtNum(media.chars)} chars (not kept)</span>`;
 }
 
 export function renderWireMessage(role, blocks, extraCls = '', tag = '') {
@@ -242,6 +266,71 @@ function renderEmbedding(wire, nreq, nresp) {
 	return `<div class="params">${params}</div>${err}<div class="msgs" style="margin-top:.5rem">${inputs}${more}</div>`;
 }
 
+// ---------------------------------------------------------------- images, speech, transcription, moderation
+const errorNote = (nresp) => (nresp?.error ? `<div class="notice err">${esc(nresp.error)}</div>` : '');
+const fileLine = (f) => `<div class="msg user"><div class="role">${esc(f.name)}${f.filename ? ' · ' + esc(f.filename) : ''}</div>${renderMedia(f.blobId ? { blobId: f.blobId, type: f.contentType, size: f.size } : null) || `<span class="tag muted">${esc(f.contentType || '')} · ${fmtBytes(f.size)} (not kept)</span>`}</div>`;
+
+function renderImageCall(wire, nreq, nresp) {
+	const prompt = nreq.prompt != null ? `<div class="msg user"><div class="role">prompt</div><div class="text">${esc(nreq.prompt)}</div></div>` : '';
+	const files = (nreq.files || []).map(fileLine).join('');
+	const images = (nresp?.images || []).map((img, i) => `<div class="msg assistant"><div class="role">image ${i + 1}</div>${renderMedia(img.media) || '<span class="tag muted">no data</span>'}
+		${img.revisedPrompt ? `<div class="text"><span class="tag muted">revised prompt</span> ${esc(img.revisedPrompt)}</div>` : ''}</div>`).join('');
+	return `<div class="params">${paramPills(nreq.params)}</div>${errorNote(nresp)}<div class="cols" style="margin-top:.5rem">
+		<div><div class="col-title">→ request</div><div class="msgs">${prompt}${files}</div></div>
+		<div><div class="col-title">← images</div><div class="msgs">${images || (wire.resp ? '' : '<span class="spinner"></span>')}</div></div></div>`;
+}
+
+function renderSpeechCall(wire, nreq, nresp) {
+	const text = `<div class="msg user"><div class="role">input</div><div class="text">${esc(nreq.text ?? '')}</div></div>`;
+	const audio = nresp?.audio ? `<div class="msg assistant"><div class="role">audio</div>${renderMedia(nresp.audio) || `<span class="tag muted">${esc(nresp.audio.type)} · ${fmtBytes(nresp.audio.size)} (not kept)</span>`}</div>` : '';
+	return `<div class="params">${paramPills(nreq.params)}</div>${errorNote(nresp)}<div class="cols" style="margin-top:.5rem">
+		<div><div class="col-title">→ text</div><div class="msgs">${text}</div></div>
+		<div><div class="col-title">← speech</div><div class="msgs">${audio || (wire.resp ? '' : '<span class="spinner"></span>')}</div></div></div>`;
+}
+
+function renderTranscriptionCall(wire, nreq, nresp) {
+	const files = (nreq.files || []).map(fileLine).join('') || '<span class="tag muted">no file part recorded</span>';
+	const facts = nresp && !nresp.error ? [nresp.language && `<span class="pill">language: <b>${esc(nresp.language)}</b></span>`,
+		nresp.duration != null && `<span class="pill">duration: <b>${esc(nresp.duration)} s</b></span>`,
+		nresp.segments != null && `<span class="pill">${nresp.segments} segments</span>`].filter(Boolean).join('') : '';
+	const text = nresp && !nresp.error ? `<div class="msg assistant"><div class="role">transcript</div><div class="text">${esc(nresp.text)}</div></div>` : '';
+	return `<div class="params">${paramPills(nreq.params)}${facts}</div>${errorNote(nresp)}<div class="cols" style="margin-top:.5rem">
+		<div><div class="col-title">→ audio</div><div class="msgs">${files}</div></div>
+		<div><div class="col-title">← text</div><div class="msgs">${text || (wire.resp ? '' : '<span class="spinner"></span>')}</div></div></div>`;
+}
+
+function renderModerationCall(wire, nreq, nresp) {
+	const rows = nreq.inputs.map((input, i) => {
+		const r = nresp?.results?.[i];
+		const verdict = !wire.resp ? '<span class="spinner"></span>' : !r ? '–'
+			: r.flagged ? `<span class="pill err">flagged</span> ${r.flaggedCategories.map(esc).join(', ')}` : '<span class="pill stop-end_turn">ok</span>';
+		const scores = r ? Object.entries(r.scores).sort(([, a], [, b]) => b - a).slice(0, 5).map(([k, v]) => probRow(k, v, r.flaggedCategories.includes(k))).join('') : '';
+		return `<tr><td class="q">${input.type === 'media' ? renderMedia(input.media) || esc(input.label) : `<div class="text">${esc(input.text)}</div>`}</td><td>${verdict}</td><td class="a">${scores}</td></tr>`;
+	}).join('');
+	const model = nresp?.model ? `<span class="pill">answered by: <b>${esc(nresp.model)}</b></span>` : '';
+	return `<div class="params">${paramPills(nreq.params)}${model}</div>${errorNote(nresp)}
+		<table class="s1" style="margin-top:.6rem"><thead><tr><th>input</th><th>verdict</th><th>top scores</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+/** The summary pills of a non-chat round-trip, before the arrow (request) and after it (response). */
+function specialSummary(kind, nreq, nresp, wire) {
+	const model = nreq.params.model ? `<span class="pill">${esc(nreq.params.model)}</span>` : '';
+	switch (kind) {
+		case 'image': return { req: `${model}<span class="pill">${esc(oneLine(nreq.prompt ?? (nreq.files?.length ? `${nreq.files.length} file${nreq.files.length === 1 ? '' : 's'}` : ''), 60))}</span>`,
+			resp: nresp?.images ? `<span class="pill stop-end_turn">${nresp.images.length} image${nresp.images.length === 1 ? '' : 's'}</span>` : '' };
+		case 'speech': return { req: `${model}${nreq.params.voice ? `<span class="pill">${esc(nreq.params.voice)}</span>` : ''}<span class="pill">${esc(oneLine(nreq.text ?? '', 60))}</span>`,
+			resp: nresp?.audio ? `<span class="pill stop-end_turn">audio · ${fmtBytes(nresp.audio.size)}</span>` : '' };
+		case 'transcription': return { req: `${model}${(nreq.files || []).map((f) => `<span class="pill">${esc(f.filename || f.name)}${f.size != null ? ' · ' + fmtBytes(f.size) : ''}</span>`).join('')}`,
+			resp: nresp?.text != null ? `<span class="pill stop-end_turn">${esc(oneLine(nresp.text, 60))}</span>` : '' };
+		case 'moderation': return { req: `${model}<span class="pill">${nreq.inputs.length} input${nreq.inputs.length === 1 ? '' : 's'}</span>`,
+			resp: nresp?.results ? (nresp.results.some((r) => r.flagged) ? `<span class="pill err">flagged · ${[...new Set(nresp.results.flatMap((r) => r.flaggedCategories))].map(esc).join(', ')}</span>` : '<span class="pill stop-end_turn">ok</span>') : '' };
+		default: return { req: '', resp: '' };
+	}
+}
+
+const SPECIAL_RENDERERS = { image: renderImageCall, speech: renderSpeechCall, transcription: renderTranscriptionCall, moderation: renderModerationCall };
+const SPECIAL_TABS = { image: 'Image', speech: 'Speech', transcription: 'Transcription', moderation: 'Moderation' };
+
 // Compact answer highlights for the round-trip summary line.
 export function systemOneHighlights(nresp) {
 	if (!nresp || !nresp.answers) return '';
@@ -266,9 +355,13 @@ export function renderWire(wire) {
 		: `<span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
 		<span class="pill">${esc(providerLabel(wire))}</span>${where}`;
-	const systemOne = adapterOf(wire)?.kind === 'systemone';
-	const embedding = adapterOf(wire)?.kind === 'embedding';
-	if (nreq && embedding) {
+	const kind = adapterOf(wire)?.kind;
+	const systemOne = kind === 'systemone';
+	const embedding = kind === 'embedding';
+	const special = SPECIAL_RENDERERS[kind] ? kind : null;
+	const specialPills = special && nreq ? specialSummary(special, nreq, nresp, wire) : null;
+	if (specialPills) summary += specialPills.req;
+	else if (nreq && embedding) {
 		if (nreq.params.model) summary += `<span class="pill">${esc(nreq.params.model)}</span>`;
 		summary += `<span class="pill">embed ${inputCount(nreq)} input${inputCount(nreq) === 1 ? '' : 's'}</span>`;
 	}
@@ -288,7 +381,8 @@ export function renderWire(wire) {
 	else if (wire.resp.error || wire.resp.status >= 400) summary += `<span class="pill err">HTTP ${esc(wire.resp.status)}</span>`;
 	else {
 		const toolUses = nresp && nresp.blocks ? nresp.blocks.filter((b) => b.type === 'tool_use') : [];
-		if (systemOne) summary += systemOneHighlights(nresp);
+		if (specialPills) summary += nresp?.error ? `<span class="pill err">${esc(oneLine(nresp.error, 60))}</span>` : specialPills.resp;
+		else if (systemOne) summary += systemOneHighlights(nresp);
 		else if (embedding && nresp && !nresp.error) summary += `<span class="pill stop-end_turn">${embeddingResult(nresp)}</span>`;
 		else if (toolUses.length) summary += toolUses.map((t) => `<span class="pill stop-tool_use">⚙ ${esc(t.name)}</span>`).join('');
 		else if (nresp && nresp.stop) summary += `<span class="pill ${stopClass(nresp.stop)}">${esc(nresp.stop)}</span>`;
@@ -297,10 +391,13 @@ export function renderWire(wire) {
 	}
 
 	const tab = state.tabs.get(wire.id) || (nreq ? 'conv' : 'req');
-	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : 'Conversation'], ['req', wire.inProcess ? 'Request' : 'Request JSON'],
+	const tabs = [nreq && ['conv', systemOne ? 'Questions & answers' : embedding ? 'Embedding' : special ? SPECIAL_TABS[special] : 'Conversation'], ['req', wire.inProcess ? 'Request' : 'Request JSON'],
 		['resp', 'Response'], !wire.inProcess && ['hdr', 'Headers']].filter(Boolean);
 	let body = `<div class="tabs">${tabs.map(([id, label]) => `<button class="tab ${tab === id ? 'on' : ''}" data-wire="${esc(wire.id)}" data-tab="${id}">${label}</button>`).join('')}</div>`;
-	if (nreq && systemOne) {
+	if (nreq && special) {
+		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${SPECIAL_RENDERERS[special](wire, nreq, nresp)}</div>`;
+	}
+	else if (nreq && systemOne) {
 		body += `<div class="pane ${tab === 'conv' ? 'on' : ''}" data-pane="conv">${renderSystemOne(wire, nreq, nresp)}</div>`;
 	}
 	else if (nreq && embedding) {
