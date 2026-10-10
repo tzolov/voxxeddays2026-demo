@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -33,19 +34,12 @@ import org.springframework.core.env.SystemEnvironmentPropertySource;
  * <p>The original base URL of every routed provider is reported to the inspector
  * ({@code spring.ai.inspector.upstream.<provider>}, sent with {@code run-start}), and the
  * proxy forwards there, so a custom gateway or a mitmweb in front of the provider keeps
- * working. Anthropic and TypeSafe (Jev) are always routed: their paths are simply appended to
- * the base URL, so e.g. TypeSafe served by a local Ollama is recorded too. OpenAI, Ollama,
- * Mistral and DeepSeek are routed only when they point at their default endpoints, because
- * their base URLs imply provider-specific paths (Azure, GitHub Models, ...) that are left alone.
- * {@code spring.ai.inspector.route.openai=always} also routes an OpenAI-compatible
- * endpoint whose base URL ends in the {@code /v1} segment, e.g. Amazon Bedrock mantle.
- *
- * <p>Any other HTTP model provider can be routed too, by naming its base-url property:
- * {@code spring.ai.inspector.proxy.<name>=<property>[,<property>...]}, e.g.
- * {@code spring.ai.inspector.proxy.groq=spring.ai.openai.base-url}. The proxy forwards to
- * that property's value; the inspector recognizes the wire format by the request path
- * (OpenAI-compatible, Anthropic, Ollama). Models running in the JVM make no HTTP calls:
- * they are shown from the advisor's model calls instead.
+ * working. Which providers, through which properties and when, is the routing table
+ * ({@link Route}, {@link #BUILT_IN}): Anthropic and TypeSafe always, OpenAI, Ollama, Mistral,
+ * DeepSeek, ElevenLabs and Stability at their own endpoints, and whatever the application adds
+ * or changes under {@code spring.ai.inspector.routes.<provider>.*}. Models running in the JVM
+ * and SDK clients without a base-url property (Google GenAI, Bedrock) make no HTTP calls the
+ * proxy sees: they are shown from the advisors and the model beans instead.
  *
  * <p>The run id in the URL lets the inspector attribute every wire call to the demo
  * that made it. When the inspector is not running nothing changes and the demo talks to
@@ -112,43 +106,15 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		props.put("spring.ai.inspector.models", models(environment));
 
 		String proxy = url + "/r/" + RUN_ID;
-		// Anthropic: always routed, forwarded to whatever it pointed at before.
-		route(props, environment, url, proxy, "anthropic", "", "https://api.anthropic.com",
-				"spring.ai.anthropic.base-url");
-		if ((isDefault(environment, "spring.ai.openai.base-url", "api.openai.com")
-				&& isDefault(environment, "spring.ai.openai.responses.base-url", "api.openai.com"))
-				|| "always".equalsIgnoreCase(environment.getProperty("spring.ai.inspector.route.openai"))) {
-			// The OpenAI SDK's base URL includes the /v1 version segment. The Responses API client
-			// (spring.ai.openai.chat.api=responses) has a base-url of its own, which wins when set.
-			route(props, environment, url, proxy, "openai", "/v1", "https://api.openai.com", "spring.ai.openai.base-url",
-					"spring.ai.openai.responses.base-url");
-		}
-		if (isDefault(environment, "spring.ai.ollama.base-url", "localhost:11434", "127.0.0.1:11434")) {
-			route(props, environment, url, proxy, "ollama", "", "http://localhost:11434", "spring.ai.ollama.base-url");
-		}
-		if (isDefault(environment, "spring.ai.mistralai.base-url", "api.mistral.ai")
-				&& isDefault(environment, "spring.ai.mistralai.chat.base-url", "api.mistral.ai")) {
-			// MistralAiChatProperties presets its own base-url, which wins over the common one.
-			route(props, environment, url, proxy, "mistralai", "", "https://api.mistral.ai",
-					"spring.ai.mistralai.base-url", "spring.ai.mistralai.chat.base-url");
-		}
-		if (isDefault(environment, "spring.ai.deepseek.base-url", "api.deepseek.com")) {
-			route(props, environment, url, proxy, "deepseek", "", "https://api.deepseek.com",
-					"spring.ai.deepseek.base-url");
-		}
-		// TypeSafe Jev systemOne calls (guardrails, judges, RAG filters): always routed, forwarded to
-		// whatever it pointed at before (api.typesafe.ai, a local Ollama serving Jev models, ...).
-		route(props, environment, url, proxy, "typesafe", "", "https://api.typesafe.ai", "spring.ai.typesafe.base-url");
-
-		// Other HTTP providers, routed on request: spring.ai.inspector.proxy.<name>=<base-url property>[,...]
-		for (String key : propertyNames(environment)) {
-			if (key.startsWith(PROXY_PREFIX) && key.length() > PROXY_PREFIX.length()) {
-				try {
-					routeOnRequest(props, environment, url, proxy, key);
-				}
-				catch (RuntimeException ex) {
-					// e.g. an unresolvable placeholder: that provider stays unrouted
-				}
+		for (Route route : routes(environment).values()) {
+			if (!route.enabled() || route.properties().isEmpty()) {
+				continue;
+			}
+			// At its default endpoints (or routed whatever it points at): forwarded to where it pointed.
+			String[] hosts = route.defaultHosts().toArray(String[]::new);
+			boolean atDefault = route.properties().stream().allMatch(property -> isDefault(environment, property, hosts));
+			if (route.always() || atDefault) {
+				route(props, environment, url, proxy, route);
 			}
 		}
 
@@ -156,25 +122,118 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 		environment.getPropertySources().addFirst(new MapPropertySource("spring-ai-inspector", props));
 	}
 
-	/** spring.ai.inspector.proxy.<name>=<base-url property>[,...]: routes that provider through the proxy. */
-	private void routeOnRequest(Map<String, Object> props, ConfigurableEnvironment environment, String url,
-			String proxy, String key) {
-		String provider = key.substring(PROXY_PREFIX.length());
-		String[] properties = environment.getProperty(key, "").split("\\s*,\\s*");
-		// No default upstream: the first of the properties that is set is where the calls go.
-		String upstream = java.util.Arrays.stream(properties)
-			.filter(p -> !p.isBlank())
-			.map(p -> environment.getProperty(p, ""))
-			.filter(v -> v.startsWith("http"))
-			.findFirst()
-			.orElse(null);
-		if (upstream != null) {
-			route(props, environment, url, proxy, provider, "", upstream, properties);
+	/**
+	 * A provider's route through the proxy, from the built-in table
+	 * ({@link #BUILT_IN}) or from {@code spring.ai.inspector.routes.<provider>.*}:
+	 * <ul>
+	 * <li>{@code properties}: the base-url properties to point at the proxy (comma-separated);</li>
+	 * <li>{@code default-hosts}: the provider's own endpoints ({@code host} or {@code host:port});</li>
+	 * <li>{@code mode}: {@code default} routes only when every property is unset or at a default host
+	 * (a base URL that implies provider-specific paths, Azure or GitHub Models for OpenAI, is left
+	 * alone); {@code always} routes whatever the properties say. Unset: {@code default} when the
+	 * route names default hosts, {@code always} otherwise;</li>
+	 * <li>{@code upstream}: where the proxy forwards when no property is set;</li>
+	 * <li>{@code suffix}: a path segment the provider's client appends to the base URL (OpenAI's
+	 * {@code /v1}), kept on the proxy side and taken off the upstream;</li>
+	 * <li>{@code enabled}: {@code false} leaves a built-in provider alone.</li>
+	 * </ul>
+	 * Properties set for a built-in provider replace that attribute; an unknown provider is a new
+	 * route. {@code spring.ai.inspector.proxy.<name>=<properties>} (mode {@code always}) and
+	 * {@code spring.ai.inspector.route.openai=always} are the older spellings and still work.
+	 */
+	record Route(String provider, List<String> properties, List<String> defaultHosts, String upstream, String suffix,
+			String mode, boolean enabled) {
+
+		boolean always() {
+			return this.mode == null || this.mode.isBlank() ? this.defaultHosts.isEmpty() : "always".equalsIgnoreCase(this.mode);
 		}
-		else {
-			this.log.warn("Spring AI Inspector: not routing '" + provider + "', none of " + String.join(", ", properties)
-					+ " is set to an http(s) base URL");
+
+		/** This route with the given attributes replaced. */
+		Route with(Map<String, String> attributes) {
+			return new Route(this.provider, attributes.containsKey("properties") ? list(attributes.get("properties")) : this.properties,
+					attributes.containsKey("default-hosts") ? list(attributes.get("default-hosts")) : this.defaultHosts,
+					attributes.getOrDefault("upstream", this.upstream), attributes.getOrDefault("suffix", this.suffix),
+					attributes.getOrDefault("mode", this.mode),
+					attributes.containsKey("enabled") ? Boolean.parseBoolean(attributes.get("enabled")) : this.enabled);
 		}
+
+		private static List<String> list(String value) {
+			return java.util.Arrays.stream(value == null ? new String[0] : value.split(",")).map(String::trim).filter(v -> !v.isEmpty()).toList();
+		}
+
+	}
+
+	static final String ROUTES_PREFIX = "spring.ai.inspector.routes.";
+
+	/**
+	 * The providers routed out of the box. Anthropic and TypeSafe (Jev) always: their paths are
+	 * simply appended to the base URL, so e.g. TypeSafe served by a local Ollama is recorded too.
+	 * The others only at their own endpoints. OpenAI's and Stability's clients append {@code /v1}
+	 * to the base URL. Mistral presets a base-url per model type, each of which wins over the
+	 * common one; OpenAI's Responses API client has one of its own.
+	 */
+	static final List<Route> BUILT_IN = List.of(
+			new Route("anthropic", List.of("spring.ai.anthropic.base-url"), List.of(), "https://api.anthropic.com", "", null, true),
+			new Route("openai", List.of("spring.ai.openai.base-url", "spring.ai.openai.responses.base-url"),
+					List.of("api.openai.com"), "https://api.openai.com", "/v1", null, true),
+			new Route("ollama", List.of("spring.ai.ollama.base-url"), List.of("localhost:11434", "127.0.0.1:11434"),
+					"http://localhost:11434", "", null, true),
+			new Route("mistralai", List.of("spring.ai.mistralai.base-url", "spring.ai.mistralai.chat.base-url",
+					"spring.ai.mistralai.embedding.base-url", "spring.ai.mistralai.moderation.base-url",
+					"spring.ai.mistralai.ocr.base-url"), List.of("api.mistral.ai"), "https://api.mistral.ai", "", null, true),
+			new Route("deepseek", List.of("spring.ai.deepseek.base-url"), List.of("api.deepseek.com"), "https://api.deepseek.com", "",
+					null, true),
+			new Route("typesafe", List.of("spring.ai.typesafe.base-url"), List.of(), "https://api.typesafe.ai", "", null, true),
+			new Route("elevenlabs", List.of("spring.ai.elevenlabs.base-url"), List.of("api.elevenlabs.io"), "https://api.elevenlabs.io",
+					"", null, true),
+			new Route("stabilityai", List.of("spring.ai.stabilityai.base-url", "spring.ai.stabilityai.image.base-url"),
+					List.of("api.stability.ai"), "https://api.stability.ai", "/v1", null, true));
+
+	/** The routing table: the built-in routes, changed or added to by the application's properties. */
+	static Map<String, Route> routes(ConfigurableEnvironment environment) {
+		Map<String, Route> routes = new LinkedHashMap<>();
+		for (Route route : BUILT_IN) {
+			routes.put(route.provider(), route);
+		}
+		Map<String, Map<String, String>> given = new LinkedHashMap<>();
+		for (String key : propertyNames(environment)) {
+			if (key.startsWith(ROUTES_PREFIX) && key.length() > ROUTES_PREFIX.length()) {
+				String rest = key.substring(ROUTES_PREFIX.length());
+				int dot = rest.lastIndexOf('.');
+				if (dot <= 0 || dot == rest.length() - 1) {
+					continue;
+				}
+				String provider = rest.substring(0, dot);
+				String attribute = rest.substring(dot + 1);
+				if ("hosts".equals(attribute) && provider.endsWith(".default")) {
+					// an environment variable: SPRING_AI_INSPECTOR_ROUTES_OPENAI_DEFAULT_HOSTS
+					provider = provider.substring(0, provider.length() - ".default".length());
+					attribute = "default-hosts";
+				}
+				String value = property(environment, key);
+				if (value != null) { // an unresolvable placeholder leaves the attribute as it is
+					given.computeIfAbsent(provider, k -> new LinkedHashMap<>()).put(attribute, value);
+				}
+			}
+		}
+		// The older spellings.
+		if ("always".equalsIgnoreCase(property(environment, "spring.ai.inspector.route.openai"))) {
+			given.computeIfAbsent("openai", k -> new LinkedHashMap<>()).putIfAbsent("mode", "always");
+		}
+		for (String key : propertyNames(environment)) {
+			if (key.startsWith(PROXY_PREFIX) && key.length() > PROXY_PREFIX.length()) {
+				String value = property(environment, key);
+				if (value == null) {
+					continue;
+				}
+				Map<String, String> attributes = given.computeIfAbsent(key.substring(PROXY_PREFIX.length()), k -> new LinkedHashMap<>());
+				attributes.putIfAbsent("properties", value);
+				attributes.putIfAbsent("mode", "always");
+			}
+		}
+		given.forEach((provider, attributes) -> routes.put(provider,
+				routes.getOrDefault(provider, new Route(provider, List.of(), List.of(), null, "", null, true)).with(attributes)));
+		return routes;
 	}
 
 	/** A property's value, or null when unset or when its placeholders can't be resolved. */
@@ -188,28 +247,35 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	}
 
 	/**
-	 * Points the provider's base-url properties at the proxy and records where the proxy
-	 * should forward to: the first configured value (minus the {@code suffix} the proxy
-	 * adds back), or the provider's default.
+	 * Points the route's base-url properties at the proxy and records where the proxy should
+	 * forward to: the first configured value (minus the suffix the proxy adds back), or the
+	 * route's upstream. A route with neither is left alone, with a warning.
 	 */
-	private static void route(Map<String, Object> props, ConfigurableEnvironment environment, String inspectorUrl,
-			String proxy, String provider, String suffix, String defaultUpstream, String... properties) {
+	private void route(Map<String, Object> props, ConfigurableEnvironment environment, String inspectorUrl, String proxy,
+			Route route) {
 		String original = null;
-		for (String property : properties) {
+		for (String property : route.properties()) {
 			String value = property(environment, property);
-			if (value != null && !value.isBlank() && !value.startsWith(inspectorUrl)) {
-				original = value;
+			// Only an http(s) URL can be forwarded to (and the inspector only accepts those as upstreams).
+			if (value != null && value.trim().startsWith("http") && !value.startsWith(inspectorUrl)) {
+				original = value.trim();
 				break;
 			}
 		}
-		String upstream = original == null ? defaultUpstream : original.replaceAll("/+$", "");
+		if (original == null && (route.upstream() == null || route.upstream().isBlank())) {
+			this.log.warn("Spring AI Inspector: not routing '" + route.provider() + "', none of "
+					+ String.join(", ", route.properties()) + " is set and the route names no upstream");
+			return;
+		}
+		String suffix = route.suffix() == null ? "" : route.suffix();
+		String upstream = (original == null ? route.upstream() : original).replaceAll("/+$", "");
 		if (!suffix.isEmpty() && upstream.endsWith(suffix)) {
 			upstream = upstream.substring(0, upstream.length() - suffix.length());
 		}
 		Set<String> routed = new LinkedHashSet<>();
-		routed.add(provider);
-		for (String property : properties) {
-			props.put(property, proxy + "/" + provider + suffix);
+		routed.add(route.provider());
+		for (String property : route.properties()) {
+			props.put(property, proxy + "/" + route.provider() + suffix);
 			// The provider the property belongs to (spring.ai.openai.base-url -> openai): its model
 			// beans' calls are on the wire, under this route's name.
 			java.util.regex.Matcher owner = PROPERTY_OWNER.matcher(property);
@@ -217,7 +283,7 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 				routed.add(owner.group(1));
 			}
 		}
-		props.put("spring.ai.inspector.upstream." + provider, upstream);
+		props.put("spring.ai.inspector.upstream." + route.provider(), upstream);
 		props.merge(ROUTED, String.join(",", routed), (a, b) -> a + "," + b);
 	}
 

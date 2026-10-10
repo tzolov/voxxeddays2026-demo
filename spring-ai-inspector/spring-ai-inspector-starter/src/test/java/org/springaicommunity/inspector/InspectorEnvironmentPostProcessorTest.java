@@ -137,6 +137,75 @@ class InspectorEnvironmentPostProcessorTest {
 	}
 
 	@Test
+	void theRoutingTableIsChangedByProperties() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.routes.ollama.default-hosts", "ollama.local:11434", // another default endpoint
+				"spring.ai.ollama.base-url", "http://ollama.local:11434",
+				"spring.ai.inspector.routes.anthropic.enabled", "false", // a built-in left alone
+				"spring.ai.anthropic.base-url", "https://gateway.example.com/anthropic",
+				"spring.ai.inspector.routes.openai.mode", "always", // the newer spelling of route.openai=always
+				"spring.ai.openai.base-url", "https://bedrock-mantle.us-east-1.api.aws/v1"));
+
+		assertThat(env.getProperty("spring.ai.ollama.base-url")).startsWith(url + "/r/").endsWith("/ollama");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.ollama")).isEqualTo("http://ollama.local:11434");
+		assertThat(env.getProperty("spring.ai.anthropic.base-url")).isEqualTo("https://gateway.example.com/anthropic");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.anthropic")).isNull();
+		assertThat(env.getProperty("spring.ai.openai.base-url")).endsWith("/openai/v1");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.openai")).isEqualTo("https://bedrock-mantle.us-east-1.api.aws");
+	}
+
+	@Test
+	void aProviderAddedToTheTableIsRoutedLikeABuiltInOne() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		// At its default endpoint with nothing set: routed, forwarded to the route's upstream.
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.routes.groq.properties", "spring.ai.groq.base-url",
+				"spring.ai.inspector.routes.groq.default-hosts", "api.groq.com",
+				"spring.ai.inspector.routes.groq.upstream", "https://api.groq.com/openai"));
+		assertThat(env.getProperty("spring.ai.groq.base-url")).startsWith(url + "/r/").endsWith("/groq");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.groq")).isEqualTo("https://api.groq.com/openai");
+		assertThat(env.getProperty("spring.ai.inspector.routed")).contains("groq");
+
+		// Pointed elsewhere: left alone, as for the built-in providers with default hosts.
+		env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.routes.groq.properties", "spring.ai.groq.base-url",
+				"spring.ai.inspector.routes.groq.default-hosts", "api.groq.com",
+				"spring.ai.groq.base-url", "https://gateway.example.com/groq"));
+		assertThat(env.getProperty("spring.ai.groq.base-url")).isEqualTo("https://gateway.example.com/groq");
+
+		// A value that isn't an http(s) URL can't be forwarded to: not routed, as before the table.
+		env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.routes.groq.properties", "spring.ai.groq.base-url",
+				"spring.ai.groq.base-url", "api.groq.com/openai"));
+		assertThat(env.getProperty("spring.ai.groq.base-url")).isEqualTo("api.groq.com/openai");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.groq")).isNull();
+
+		// Without default hosts and upstream: routed when set, as spring.ai.inspector.proxy.<name> does.
+		env = environment(Map.of("spring.ai.inspector.url", url,
+				"spring.ai.inspector.routes.groq.properties", "spring.ai.groq.base-url",
+				"spring.ai.groq.base-url", "https://gateway.example.com/groq"));
+		assertThat(env.getProperty("spring.ai.groq.base-url")).endsWith("/groq");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.groq")).isEqualTo("https://gateway.example.com/groq");
+	}
+
+	@Test
+	void routesElevenLabsStabilityAndMistralsOtherModelsAtTheirDefaults() throws IOException {
+		String url = serve("{\"name\":\"spring-ai-inspector\"}");
+
+		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url));
+
+		assertThat(env.getProperty("spring.ai.elevenlabs.base-url")).endsWith("/elevenlabs");
+		assertThat(env.getProperty("spring.ai.inspector.upstream.elevenlabs")).isEqualTo("https://api.elevenlabs.io");
+		assertThat(env.getProperty("spring.ai.stabilityai.base-url")).endsWith("/stabilityai/v1"); // its client appends /v1
+		assertThat(env.getProperty("spring.ai.inspector.upstream.stabilityai")).isEqualTo("https://api.stability.ai");
+		assertThat(env.getProperty("spring.ai.mistralai.moderation.base-url")).endsWith("/mistralai");
+		assertThat(env.getProperty("spring.ai.mistralai.ocr.base-url")).endsWith("/mistralai");
+	}
+
+	@Test
 	void routesAnyOtherHttpProviderWhenAsked() throws IOException {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 

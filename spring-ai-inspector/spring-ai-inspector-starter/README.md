@@ -237,20 +237,22 @@ flowchart LR
     publish --> active([Auto-configuration on,<br/>run-start sent])
 ```
 
-Which base URLs are rewritten:
+Which base URLs are rewritten is the **routing table**, built in and changed or extended by properties
+(`spring.ai.inspector.routes.<provider>.*`, see [Route other model providers](#6-route-other-model-providers)):
 
-| Provider | Property | Routed when |
+| Provider | Properties | Routed when |
 |---|---|---|
-| Anthropic | `spring.ai.anthropic.base-url` | always: paths are simply appended to the base URL |
-| TypeSafe (Jev) | `spring.ai.typesafe.base-url` | always |
-| OpenAI | `spring.ai.openai.base-url`, `spring.ai.openai.responses.base-url` | both unset or `api.openai.com`, or with `spring.ai.inspector.route.openai=always` |
-| Ollama | `spring.ai.ollama.base-url` | unset or `localhost:11434` |
-| Mistral AI | `spring.ai.mistralai.base-url`, `spring.ai.mistralai.chat.base-url` | unset or `api.mistral.ai` |
-| DeepSeek | `spring.ai.deepseek.base-url` | unset or `api.deepseek.com` |
-| any other HTTP provider | named by `spring.ai.inspector.proxy.<name>=<property>[,...]` | always, when the property holds an `http(s)` URL |
+| `anthropic` | `spring.ai.anthropic.base-url` | always: paths are simply appended to the base URL |
+| `typesafe` (Jev) | `spring.ai.typesafe.base-url` | always |
+| `openai` | `spring.ai.openai.base-url`, `spring.ai.openai.responses.base-url` | both unset or at `api.openai.com` (the client appends `/v1`) |
+| `ollama` | `spring.ai.ollama.base-url` | unset or at `localhost:11434` |
+| `mistralai` | `spring.ai.mistralai.base-url` and the `chat`, `embedding`, `moderation`, `ocr` ones | unset or at `api.mistral.ai` |
+| `deepseek` | `spring.ai.deepseek.base-url` | unset or at `api.deepseek.com` |
+| `elevenlabs` | `spring.ai.elevenlabs.base-url` | unset or at `api.elevenlabs.io` |
+| `stabilityai` | `spring.ai.stabilityai.base-url`, `spring.ai.stabilityai.image.base-url` | unset or at `api.stability.ai` (the client appends `/v1`) |
 
-OpenAI, Ollama, Mistral and DeepSeek are left alone when they point elsewhere. Their base URLs can imply
-provider-specific paths (Azure, GitHub Models, ...) that the proxy should not guess.
+A provider with default hosts is left alone when it points elsewhere: its base URL can imply provider-specific
+paths (Azure, GitHub Models, ...) that the proxy should not guess. `mode=always` routes it anyway.
 
 When the app starts, `RunLifecycle` sends `run-start`. The event carries the app name, the models, the pid, the
 upstreams and the *routed* providers, whose model calls are already visible on the wire. When the context closes,
@@ -632,20 +634,39 @@ McpSyncClient weatherClient(ObjectProvider<InspectorClient> inspector, ObjectPro
 ### 6. Route other model providers
 
 Providers not in the routing table, or OpenAI-compatible endpoints at a custom URL, are not routed by default.
-Their calls still appear from the `MODEL` advisor's events, marked "no HTTP". To record their HTTP traffic, name
-the base-url property to route:
+Their calls still appear from the `MODEL` advisor's events, marked "no HTTP". The table is changed or extended
+with properties; each `spring.ai.inspector.routes.<provider>.*` entry replaces that attribute of a built-in
+provider or adds a new one:
+
+| Attribute | Meaning |
+|---|---|
+| `properties` | the base-url properties to point at the proxy, comma-separated |
+| `default-hosts` | the provider's own endpoints (`host` or `host:port`) |
+| `mode` | `default`: route only when every property is unset or at a default host; `always`: route whatever they say. Unset: `default` with default hosts, `always` without |
+| `upstream` | where the proxy forwards when no property is set |
+| `suffix` | a path segment the provider's client appends to the base URL (OpenAI's `/v1`): kept on the proxy side, taken off the upstream |
+| `enabled` | `false` leaves a built-in provider alone |
 
 ```properties
-# Groq through Spring AI's OpenAI client
+# Groq through Spring AI's OpenAI client: route it whatever the base URL says
 spring.ai.openai.base-url=https://api.groq.com/openai
-spring.ai.inspector.proxy.groq=spring.ai.openai.base-url
+spring.ai.inspector.routes.groq.properties=spring.ai.openai.base-url
 
-# or: route a non-default OpenAI base URL ending in /v1 (e.g. Amazon Bedrock mantle)
-spring.ai.inspector.route.openai=always
+# a non-default OpenAI base URL ending in /v1 (e.g. Amazon Bedrock mantle)
+spring.ai.inspector.routes.openai.mode=always
+
+# an Ollama on another machine counts as Ollama's own endpoint
+spring.ai.inspector.routes.ollama.default-hosts=localhost:11434,ollama.local:11434
+
+# never route Anthropic (e.g. a gateway with its own recording)
+spring.ai.inspector.routes.anthropic.enabled=false
 ```
 
-The proxy forwards to the property's original value. The inspector recognizes the wire format (OpenAI-compatible,
-Anthropic, Ollama, embeddings) from the request path.
+The older spellings `spring.ai.inspector.proxy.<name>=<properties>` (a route with mode `always`) and
+`spring.ai.inspector.route.openai=always` still work. The proxy forwards to the property's original value, or to
+the route's `upstream`. The inspector recognizes the wire format (OpenAI-compatible, Anthropic, Ollama,
+embeddings, images, speech, transcription, moderation) from the request path; a provider without an adapter
+(ElevenLabs, Stability) is shown as raw JSON or binary.
 
 Google GenAI and Bedrock (Converse) are not proxied. Those apps still show their advisor-level model calls.
 
@@ -656,8 +677,8 @@ Google GenAI and Bedrock (Converse) are not proxied. Those apps still show their
 | `spring.ai.inspector.enabled` | `true` | `false` turns the starter off completely: no ping, no routing |
 | `spring.ai.inspector.url` | `http://localhost:9001` | where the inspector runs |
 | `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders to show as file-based memory |
-| `spring.ai.inspector.route.openai` | | `always` routes a non-default OpenAI base URL ending in `/v1` |
-| `spring.ai.inspector.proxy.<name>` | | base-url properties of another provider to route, comma-separated |
+| `spring.ai.inspector.routes.<provider>.*` | the built-in table | `properties`, `default-hosts`, `mode`, `upstream`, `suffix`, `enabled` of a route, see [Route other model providers](#6-route-other-model-providers) |
+| `spring.ai.inspector.route.openai`, `spring.ai.inspector.proxy.<name>` | | the older spellings of `routes.openai.mode=always` and `routes.<name>.properties=...` |
 | `spring.ai.inspector.token` | | the inspector's `spring.ai.inspector.token`, when it has one; sent with every event |
 | `spring.ai.inspector.memory-snapshots` | `true` | `false` skips the memory snapshots (two store reads per call) |
 | `spring.ai.inspector.reactor-context-propagation` | `true` | sets `spring.reactor.context-propagation=auto` when the app didn't set it (and enables Reactor's hook for it), so streamed calls stay attributed on Reactor threads |

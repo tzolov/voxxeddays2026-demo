@@ -141,22 +141,16 @@ How the starter hooks in:
 
 - At startup, the starter checks `<spring.ai.inspector.url>/api/ping`. If the inspector answers, it points the
   provider base URLs at the inspector's recording proxy (`/r/<runId>/<provider>`):
-  - `spring.ai.anthropic.base-url`: always. The proxy forwards to the base-url the app had before (a gateway, a
-    mitmweb, ...), or to `https://api.anthropic.com` when none was set.
-  - `spring.ai.openai.base-url` and `spring.ai.openai.responses.base-url` (the Responses API client's own): only if both
-    are unset or pointing at `api.openai.com`, so Azure or GitHub Models setups are untouched.
-    `spring.ai.inspector.route.openai=always` routes it anyway, for an OpenAI-compatible endpoint whose base URL ends in `/v1`
-    (e.g. Amazon Bedrock mantle).
-  - `spring.ai.ollama.base-url`: only if unset or pointing at `localhost:11434`.
-  - `spring.ai.mistralai.base-url` and `spring.ai.mistralai.chat.base-url`: only if unset or pointing at `api.mistral.ai`.
-    Both are set because the chat properties preset their own base-url, which wins over the common one.
-  - `spring.ai.deepseek.base-url`: only if unset or pointing at `api.deepseek.com`.
-  - `spring.ai.typesafe.base-url`: always, like Anthropic. The proxy forwards to the base-url the app had before (e.g. a
-    local Ollama serving Jev models), or to `https://api.typesafe.ai` when none was set.
-  - Any other HTTP provider, when you name its base-url property:
-    `spring.ai.inspector.proxy.<name>=<property>[,<property>...]`, e.g.
-    `spring.ai.inspector.proxy.groq=spring.ai.openai.base-url`. The proxy forwards to that property's value, and the
-    inspector recognizes the wire format by the request path (OpenAI-compatible, Anthropic, Ollama, embeddings).
+  - a built-in routing table: Anthropic and TypeSafe always (the proxy forwards to the base-url the app had before,
+    a gateway, a mitmweb, a local Ollama serving Jev models, or to the provider's own endpoint); OpenAI (both the
+    common and the Responses API base-url), Ollama, Mistral (all its model types), DeepSeek, ElevenLabs and Stability
+    only when unset or pointing at their own endpoints, so Azure or GitHub Models setups are untouched.
+  - the table changed or extended by properties, `spring.ai.inspector.routes.<provider>.{properties, default-hosts,
+    mode, upstream, suffix, enabled}`: e.g. `routes.openai.mode=always` for an OpenAI-compatible endpoint whose base
+    URL ends in `/v1` (Amazon Bedrock mantle), `routes.groq.properties=spring.ai.openai.base-url` for a provider of
+    its own, `routes.anthropic.enabled=false` to leave one alone. The inspector recognizes the wire format by the
+    request path (OpenAI-compatible, Anthropic, Ollama, embeddings, images, speech, transcription, moderation);
+    see the [starter README](spring-ai-inspector-starter/README.md#6-route-other-model-providers).
 - Models that make no HTTP calls (e.g. jinfer running in the JVM) or providers that aren't routed are still shown:
   chat round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
   model and token usage it reported; embedding, image, speech, transcription and moderation calls come from the
@@ -177,7 +171,7 @@ Settings, for the instrumented applications:
 | `spring.ai.inspector.enabled` | `true` | set to `false` to opt a demo out |
 | `spring.ai.inspector.url` | `http://localhost:9001` | where the inspector runs |
 | `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders shown as file-based memory |
-| `spring.ai.inspector.route.openai` | | `always` routes a non-default OpenAI base URL (an OpenAI-compatible endpoint ending in `/v1`) |
+| `spring.ai.inspector.routes.<provider>.*` | the built-in table | changes or extends the routing table (`properties`, `default-hosts`, `mode`, `upstream`, `suffix`, `enabled`); `route.openai` and `proxy.<name>` are the older spellings |
 
 The starter only routes traffic when `<url>/api/ping` identifies itself as the inspector, so another service on the
 same port is never used by mistake. Each run reports the original base URL of every provider it routes, and the
