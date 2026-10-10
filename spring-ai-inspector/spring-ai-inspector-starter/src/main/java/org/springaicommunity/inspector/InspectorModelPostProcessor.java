@@ -173,12 +173,12 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 		try {
 			Object result = invocation.proceed();
 			report(kind, provider, prompt, result == null ? null : asResponse.apply(result), null,
-					System.currentTimeMillis() - start, clientCallId, false);
+					System.currentTimeMillis() - start, clientCallId, Outcome.CALLED);
 			return result;
 		}
 		catch (Throwable ex) {
 			report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-					System.currentTimeMillis() - start, clientCallId, false);
+					System.currentTimeMillis() - start, clientCallId, Outcome.CALLED);
 			throw ex;
 		}
 	}
@@ -203,6 +203,9 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			java.io.ByteArrayOutputStream audio = new java.io.ByteArrayOutputStream();
 			StringBuilder text = new StringBuilder();
 			long start = System.currentTimeMillis();
+			// One report per subscription: an operator may cancel the source after taking its last item
+			// (next(), take(n)), and a source may still signal completion after a cancel.
+			java.util.concurrent.atomic.AtomicBoolean reported = new java.util.concurrent.atomic.AtomicBoolean();
 			return ((Flux<Object>) flux).doOnNext(item -> {
 				try {
 					Object chunk = asResponse.apply(item);
@@ -218,11 +221,30 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 					// never break the stream for the inspector's sake
 				}
 			}).doOnComplete(() -> {
-				Object whole = "speech".equals(kind) ? speech(audio.toByteArray()) : transcription(text.toString());
-				report(kind, provider, prompt, whole, null, System.currentTimeMillis() - start, clientCallId, true);
-			}).doOnError(ex -> report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-					System.currentTimeMillis() - start, clientCallId, true));
+				if (reported.compareAndSet(false, true)) {
+					Object whole = "speech".equals(kind) ? speech(audio.toByteArray()) : transcription(text.toString());
+					report(kind, provider, prompt, whole, null, System.currentTimeMillis() - start, clientCallId, Outcome.STREAMED);
+				}
+			}).doOnCancel(() -> {
+				// The application stopped listening (take(n), a timeout, a closed connection): what came through so far.
+				if (reported.compareAndSet(false, true)) {
+					Object sofar = "speech".equals(kind) ? speech(audio.toByteArray()) : transcription(text.toString());
+					report(kind, provider, prompt, sofar, null, System.currentTimeMillis() - start, clientCallId, Outcome.CANCELLED);
+				}
+			}).doOnError(ex -> {
+				if (reported.compareAndSet(false, true)) {
+					report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
+							System.currentTimeMillis() - start, clientCallId, Outcome.STREAMED);
+				}
+			});
 		});
+	}
+
+	/** How a call ended: a blocking call, a stream that completed (or failed), a stream the application cancelled. */
+	enum Outcome {
+
+		CALLED, STREAMED, CANCELLED
+
 	}
 
 	/** The kind of model, or null for a bean this class doesn't observe. */
@@ -269,7 +291,7 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 	}
 
 	private void report(String kind, String provider, Object prompt, Object result, String error, long durationMs,
-			String clientCallId, boolean streamed) {
+			String clientCallId, Outcome outcome) {
 		InspectorClient c = client();
 		if (c == null) {
 			return;
@@ -286,8 +308,11 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			event.put("modelType", modelType(kind));
 			event.put("provider", provider);
 			event.put("thread", thread);
-			if (streamed) {
+			if (outcome != Outcome.CALLED) {
 				event.put("streamed", true);
+			}
+			if (outcome == Outcome.CANCELLED) {
+				event.put("cancelled", true);
 			}
 			Map<String, Object> request = switch (kind) {
 				case "image" -> imageRequest(c, (ImagePrompt) prompt);

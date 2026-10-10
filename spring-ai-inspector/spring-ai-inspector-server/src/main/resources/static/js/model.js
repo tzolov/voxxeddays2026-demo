@@ -240,7 +240,8 @@ function onTheWireKind(run, ev) {
 function inProcessModelCall(run, ev) {
 	const replayed = ev.recordedTs != null;
 	const start = recordedTs(ev) - (ev.durationMs || 0);
-	const wire = { id: 'mc:' + ev.modelCallId, inProcess: true, inProcessLabel: `${ev.modelType || 'Model'} call · no HTTP`,
+	const wire = { id: 'mc:' + ev.modelCallId, inProcess: true,
+		inProcessLabel: `${ev.modelType || 'Model'} call · no HTTP${ev.cancelled ? ' · cancelled by the app' : ev.streamed ? ' · streamed' : ''}`,
 		num: run.wireList.length + 1, prev: run.wireList[run.wireList.length - 1] || null,
 		req: { provider: ev.provider, method: '', path: PATH_OF_KIND[ev.kind] || '/' + ev.kind, url: '', headers: {}, seq: ev.seq - 0.5, ord: ev.ord - ORD_STEP / 2,
 			ts: ev.ts - (ev.durationMs || 0), ...(replayed ? { recordedTs: start } : {}), clientCallId: ev.clientCallId,

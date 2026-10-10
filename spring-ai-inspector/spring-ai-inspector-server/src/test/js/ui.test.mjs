@@ -807,6 +807,16 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
 });
 
+test('a streamed or cancelled model bean call says so in its label', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' });
+	handle({ type: 'model-call', runId: 'r', ts: 2, modelCallId: 'm1', kind: 'speech', modelType: 'TextToSpeechModel', provider: 'fake', streamed: true, request: { text: 'hi', params: {} }, response: { audio: { type: 'audio/mpeg', size: 5 }, blocks: [], usage: null }, durationMs: 10 });
+	handle({ type: 'model-call', runId: 'r', ts: 3, modelCallId: 'm2', kind: 'speech', modelType: 'TextToSpeechModel', provider: 'fake', streamed: true, cancelled: true, request: { text: 'hi', params: {} }, response: { audio: { type: 'audio/mpeg', size: 3 }, blocks: [], usage: null }, durationMs: 4 });
+	const run = state.runs.get('r');
+	assert.equal(run.wires.get('mc:m1').inProcessLabel, 'TextToSpeechModel call · no HTTP · streamed');
+	assert.equal(run.wires.get('mc:m2').inProcessLabel, 'TextToSpeechModel call · no HTTP · cancelled by the app');
+});
+
 test('a recording carries the media the inspector still holds, as blob events the UI itself ignores', async () => {
 	state.runs.clear();
 	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' });

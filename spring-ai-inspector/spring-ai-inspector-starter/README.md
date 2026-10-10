@@ -409,7 +409,8 @@ Spring AI has its own vector store observations, but they fire only when the sto
 - Beans of a routed provider are not wrapped: their calls are on the wire already. The inspector also drops a
   bean's call when an HTTP round-trip of the same kind was recorded for the same call meanwhile.
 - A streamed speech or transcription call (`stream`) is reported once, when the stream completes, with the
-  chunks put together (the audio bytes, the text) and marked `streamed`; the stream reaches the app untouched.
+  chunks put together (the audio bytes, the text) and marked `streamed`; one the app cancels is reported with what
+  came through, marked `cancelled`. The stream reaches the app untouched.
   The interfaces' convenience methods (`call(String)`, `stream(String)`, `transcribe`, `streamTranscribe`) are
   reported too, once: they call the prompt method on the bean itself (past an interface proxy, through a
   subclass proxy again), so the report is made from the convenience method and the nested call is skipped.

@@ -215,6 +215,27 @@ class InspectorModelPostProcessorTest {
 	}
 
 	@Test
+	void aStreamTheApplicationCancelsIsReportedWithWhatCameThrough() {
+		TextToSpeechModel model = wrap(new FakeSpeechModel());
+
+		byte[] first = model.stream(new TextToSpeechPrompt("Welcome", TextToSpeechOptions.builder().model("tts-1").format("mp3").build()))
+			.map(r -> r.getResult().getOutput())
+			.next() // the first chunk only: the rest is cancelled
+			.block();
+
+		assertThat(first).containsExactly(1, 2, 3);
+		Map<String, Object> event = event();
+		assertThat(event).containsEntry("streamed", true).containsEntry("cancelled", true).doesNotContainKey("error");
+		assertThat(map(map(event.get("response")).get("audio"))).containsEntry("size", 3);
+
+		// A one-item stream taken whole: the operator cancels right after the item, the source may also complete.
+		this.events.clear();
+		this.<TextToSpeechModel>wrap(new FinalSpeechModel()).stream(new TextToSpeechPrompt("Hi")).next().block();
+		this.client.awaitBackground();
+		assertThat(events()).hasSize(1); // one report, whichever signal came first
+	}
+
+	@Test
 	void aStreamedTranscriptionIsReportedOnceWithItsTextJoined() {
 		TranscriptionModel model = wrap(new FakeTranscriptionModel());
 
