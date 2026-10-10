@@ -102,7 +102,8 @@ round-trip of the same call was recorded meanwhile.
 
 `model-call` (starter, image / speech / transcription / moderation model proxies): `modelCallId`,
 `clientCallId`, `kind` (`image|speech|transcription|moderation`), `modelType`, `provider`, `model`,
-`thread`, `request`, `response` or `error`, `durationMs`. The `request` and `response` shapes are the
+`thread`, `request`, `response` or `error`, `durationMs`, `streamed: true` for a `stream` call (speech,
+transcription), reported once when the stream completes with the chunks put together. The `request` and `response` shapes are the
 normalized ones of the wire adapters, in [design/wire-adapters.md](design/wire-adapters.md) (a gitignored
 design note) and in `providers.js`.
 

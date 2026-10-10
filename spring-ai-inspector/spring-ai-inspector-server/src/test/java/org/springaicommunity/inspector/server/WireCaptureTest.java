@@ -88,6 +88,35 @@ class WireCaptureTest {
 	}
 
 	@Test
+	void putsStreamedChatAudioDeltasTogetherAsOnePlayableBlob() {
+		BlobStore blobs = new BlobStore(1_000_000, 100_000);
+		byte[] a = { 1, 2, 3, 4, 5, 6 }; byte[] b = { 7, 8, 9 }; byte[] c = { 10, 11, 12, 13 }; // raw PCM pieces
+		String ea = java.util.Base64.getEncoder().encodeToString(a), eb = java.util.Base64.getEncoder().encodeToString(b),
+				ec = java.util.Base64.getEncoder().encodeToString(c);
+		String sse = "data: {\"choices\":[{\"delta\":{\"audio\":{\"id\":\"audio_1\",\"data\":\"" + ea + "\"}}}]}\n\n"
+				+ "data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"" + eb + "\",\"transcript\":\"Brus\"}}}]}\n\n"
+				+ "data: {\"choices\":[{\"delta\":{\"audio\":{\"transcript\":\"sels.\"}}}]}\n\n"
+				+ "data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"" + ec + "\"}}}]}\n\n"
+				+ "data: [DONE]\n\n";
+		Map<String, Object> event = new LinkedHashMap<>();
+
+		new WireCapture(100_000, blobs).body(event, sse.getBytes(StandardCharsets.UTF_8), "text/event-stream", null);
+
+		String body = event.get("body").toString();
+		int chars = ea.length() + eb.length() + ec.length();
+		assertThat(body).matches("(?s).*\"audio\":\\{\"id\":\"audio_1\",\"data\":\"<base64 " + chars + " chars audio/wav blob:[0-9a-f]{16}>\"\\}.*")
+			.contains("\"data\":\"\",\"transcript\":\"Brus\"")
+			.contains("\"transcript\":\"sels.\"")
+			.contains("\"audio\":{\"data\":\"\"}")
+			.contains("data: [DONE]");
+		String id = body.replaceAll("(?s).*blob:([0-9a-f]+)>.*", "$1");
+		BlobStore.Blob blob = blobs.get(id);
+		assertThat(blob.contentType()).isEqualTo("audio/wav");
+		assertThat(blob.bytes()).hasSize(44 + 13).startsWith("RIFF".getBytes(StandardCharsets.US_ASCII)).endsWith(c);
+		assertThat(blobs.size()).isOne();
+	}
+
+	@Test
 	void keepsABinaryBodyAsABlob() {
 		BlobStore blobs = new BlobStore(1_000_000, 100_000);
 		Map<String, Object> event = new LinkedHashMap<>();

@@ -12,9 +12,11 @@ import java.util.UUID;
 
 import org.aopalliance.intercept.MethodInterceptor;
 
+import org.springframework.ai.audio.transcription.AudioTranscription;
 import org.springframework.ai.audio.transcription.AudioTranscriptionPrompt;
 import org.springframework.ai.audio.transcription.AudioTranscriptionResponse;
 import org.springframework.ai.audio.transcription.TranscriptionModel;
+import org.springframework.ai.audio.tts.Speech;
 import org.springframework.ai.audio.tts.TextToSpeechModel;
 import org.springframework.ai.audio.tts.TextToSpeechPrompt;
 import org.springframework.ai.audio.tts.TextToSpeechResponse;
@@ -37,6 +39,7 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import reactor.core.publisher.Flux;
 
 /**
  * Wraps the non-chat model beans ({@link ImageModel}, {@link TextToSpeechModel},
@@ -96,23 +99,69 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 		factory.setProxyTargetClass(!Modifier.isFinal(bean.getClass().getModifiers()));
 		factory.addAdvice((MethodInterceptor) invocation -> {
 			Object[] args = invocation.getArguments();
-			if (!"call".equals(invocation.getMethod().getName()) || args.length != 1 || !isPrompt(args[0])) {
+			String method = invocation.getMethod().getName();
+			if (args.length != 1 || !isPrompt(args[0])) {
+				return invocation.proceed();
+			}
+			if ("stream".equals(method) && ("speech".equals(kind) || "transcription".equals(kind))) {
+				return streamed(kind, provider, args[0], invocation.proceed());
+			}
+			if (!"call".equals(method)) {
 				return invocation.proceed();
 			}
 			String clientCallId = InspectorCorrelation.currentCallId();
 			long start = System.currentTimeMillis();
 			try {
 				Object result = invocation.proceed();
-				report(kind, provider, args[0], result, null, System.currentTimeMillis() - start, clientCallId);
+				report(kind, provider, args[0], result, null, System.currentTimeMillis() - start, clientCallId, false);
 				return result;
 			}
 			catch (Throwable ex) {
 				report(kind, provider, args[0], null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-						System.currentTimeMillis() - start, clientCallId);
+						System.currentTimeMillis() - start, clientCallId, false);
 				throw ex;
 			}
 		});
 		return factory.getProxy();
+	}
+
+	/**
+	 * A streamed speech or transcription call: the chunks are put together as they pass (the
+	 * audio bytes, the text) and the whole is reported once the stream completes, as one
+	 * call marked {@code streamed}, so it is shown like a blocking one. The stream itself is
+	 * handed to the application untouched; a failure to describe it never fails it.
+	 */
+	@SuppressWarnings("unchecked")
+	private Object streamed(String kind, String provider, Object prompt, Object result) {
+		if (!(result instanceof Flux<?> flux)) {
+			return result;
+		}
+		String clientCallId = InspectorCorrelation.currentCallId(); // the caller's thread: known here, not in the callbacks
+		// One set of buffers per subscription: a stream subscribed to again (a retry) is a call of its own.
+		return Flux.defer(() -> {
+			java.io.ByteArrayOutputStream audio = new java.io.ByteArrayOutputStream();
+			StringBuilder text = new StringBuilder();
+			long start = System.currentTimeMillis();
+			return ((Flux<Object>) flux).doOnNext(chunk -> {
+				try {
+					if (chunk instanceof TextToSpeechResponse speech && speech.getResult() != null && speech.getResult().getOutput() != null) {
+						audio.write(speech.getResult().getOutput());
+					}
+					else if (chunk instanceof AudioTranscriptionResponse transcription && transcription.getResult() != null
+							&& transcription.getResult().getOutput() != null) {
+						text.append(transcription.getResult().getOutput());
+					}
+				}
+				catch (RuntimeException | java.io.IOException ex) {
+					// never break the stream for the inspector's sake
+				}
+			}).doOnComplete(() -> {
+				Object whole = "speech".equals(kind) ? new TextToSpeechResponse(List.of(new Speech(audio.toByteArray())))
+						: new AudioTranscriptionResponse(new AudioTranscription(text.toString()));
+				report(kind, provider, prompt, whole, null, System.currentTimeMillis() - start, clientCallId, true);
+			}).doOnError(ex -> report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
+					System.currentTimeMillis() - start, clientCallId, true));
+		});
 	}
 
 	/** The kind of model, or null for a bean this class doesn't observe. */
@@ -159,7 +208,7 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 	}
 
 	private void report(String kind, String provider, Object prompt, Object result, String error, long durationMs,
-			String clientCallId) {
+			String clientCallId, boolean streamed) {
 		InspectorClient c = client();
 		if (c == null) {
 			return;
@@ -173,6 +222,9 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			event.put("modelType", modelType(kind));
 			event.put("provider", provider);
 			event.put("thread", Thread.currentThread().getName());
+			if (streamed) {
+				event.put("streamed", true);
+			}
 			Map<String, Object> request = switch (kind) {
 				case "image" -> imageRequest(c, (ImagePrompt) prompt);
 				case "speech" -> speechRequest((TextToSpeechPrompt) prompt);

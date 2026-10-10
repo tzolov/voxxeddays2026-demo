@@ -137,6 +137,52 @@ class InspectorModelPostProcessorTest {
 	}
 
 	@Test
+	void aStreamedSpeechCallIsReportedOnceWithTheChunksPutTogether() {
+		TextToSpeechModel model = wrap(new FakeSpeechModel());
+
+		List<byte[]> heard = model.stream(new TextToSpeechPrompt("Welcome", TextToSpeechOptions.builder().model("tts-1").format("mp3").build()))
+			.map(r -> r.getResult().getOutput())
+			.collectList()
+			.block();
+
+		assertThat(heard).hasSize(2); // the application got the stream as it was
+		Map<String, Object> event = event();
+		assertThat(map(map(event.get("response")).get("audio"))).containsEntry("size", 5);
+		assertThat(event).containsEntry("kind", "speech").containsEntry("streamed", true).containsEntry("model", "tts-1");
+		Map<String, Object> audio = map(map(event.get("response")).get("audio"));
+		assertThat(audio).containsEntry("type", "audio/mpeg").containsEntry("size", 5);
+		assertThat(this.uploads).containsExactly(audio.get("blobId") + " audio/mpeg 5");
+	}
+
+	@Test
+	void aStreamSubscribedToTwiceIsTwoCallsNotOneWithDoubledAudio() {
+		TextToSpeechModel model = wrap(new FakeSpeechModel());
+		Flux<TextToSpeechResponse> stream = model.stream(new TextToSpeechPrompt("Welcome", TextToSpeechOptions.builder().model("tts-1").format("mp3").build()));
+
+		stream.blockLast();
+		stream.blockLast(); // e.g. a retry
+
+		this.client.awaitBackground();
+		assertThat(events()).hasSize(2)
+			.allSatisfy(e -> assertThat(map(map(e.get("response")).get("audio"))).containsEntry("size", 5));
+	}
+
+	@Test
+	void aStreamedTranscriptionIsReportedOnceWithItsTextJoined() {
+		TranscriptionModel model = wrap(new FakeTranscriptionModel());
+
+		String text = model.stream(new AudioTranscriptionPrompt(new ByteArrayResource(new byte[] { 1 }), () -> "whisper-1"))
+			.map(r -> r.getResult().getOutput())
+			.reduce("", String::concat)
+			.block();
+
+		assertThat(text).isEqualTo("What is the weather?");
+		Map<String, Object> event = event();
+		assertThat(event).containsEntry("kind", "transcription").containsEntry("streamed", true);
+		assertThat(map(event.get("response"))).containsEntry("text", "What is the weather?");
+	}
+
+	@Test
 	void reportsATranscriptionWithARereadableFileUploadedAndAOneShotStreamLeftAlone() {
 		TranscriptionModel model = wrap(new FakeTranscriptionModel());
 		byte[] wav = "RIFF....WAVE....".getBytes(StandardCharsets.US_ASCII);
@@ -225,7 +271,8 @@ class InspectorModelPostProcessorTest {
 
 		@Override
 		public Flux<TextToSpeechResponse> stream(TextToSpeechPrompt prompt) {
-			return Flux.just(call(prompt));
+			return Flux.just(new TextToSpeechResponse(List.of(new Speech(new byte[] { 1, 2, 3 }))),
+					new TextToSpeechResponse(List.of(new Speech(new byte[] { 4, 5 }))));
 		}
 
 	}
@@ -241,6 +288,12 @@ class InspectorModelPostProcessorTest {
 				throw new IllegalStateException(ex);
 			}
 			return new AudioTranscriptionResponse(new AudioTranscription("What is the weather?"));
+		}
+
+		@Override
+		public Flux<AudioTranscriptionResponse> stream(AudioTranscriptionPrompt prompt) {
+			return Flux.just(new AudioTranscriptionResponse(new AudioTranscription("What is ")),
+					new AudioTranscriptionResponse(new AudioTranscription("the weather?")));
 		}
 
 	}

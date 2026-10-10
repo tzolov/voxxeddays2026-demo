@@ -117,7 +117,11 @@ final class WireCapture {
 			binary(event, contentType, decoded.length, keep(decoded, mediaType(contentType, decoded)), null);
 			return;
 		}
-		String text = stripBase64(new String(decoded, StandardCharsets.UTF_8));
+		String text = new String(decoded, StandardCharsets.UTF_8);
+		if (contentType != null && contentType.toLowerCase(Locale.ROOT).contains("event-stream")) {
+			text = streamedAudio(text);
+		}
+		text = stripBase64(text);
 		if (text.length() > this.maxBodyChars) {
 			event.put("truncated", true);
 			event.put("size", text.length());
@@ -178,6 +182,79 @@ final class WireCapture {
 		while (m.find());
 		m.appendTail(out);
 		return out.toString();
+	}
+
+	/** The flat {@code "audio":{...}} object of a Chat Completions delta, and the base64 {@code data} in it. */
+	private static final Pattern AUDIO_OBJECT = Pattern.compile("\"audio\"\\s*:\\s*\\{([^{}]*)\\}");
+
+	private static final Pattern AUDIO_DATA = Pattern.compile("\"data\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\"");
+
+	/**
+	 * Audio a chat model streams back (Chat Completions with {@code modalities: ["text",
+	 * "audio"]}) comes as small base64 deltas, each under the size that {@link #stripBase64}
+	 * looks at. Put together they are the answer's audio: raw 16-bit PCM at 24 kHz, which is
+	 * what OpenAI streams, given a WAV header so a browser can play it (an already typed format
+	 * is kept as it is). The whole is kept as one blob, the first delta's {@code data} carries
+	 * the marker, the others are emptied. Anything odd (a delta that doesn't decode) leaves the
+	 * stream as it was.
+	 */
+	String streamedAudio(String text) {
+		if (!text.contains("\"audio\"") || !text.contains("\"data\"")) {
+			return text;
+		}
+		java.io.ByteArrayOutputStream pcm = new java.io.ByteArrayOutputStream();
+		List<int[]> spans = new ArrayList<>(); // start and end of each data value in text
+		int chars = 0;
+		Matcher object = AUDIO_OBJECT.matcher(text);
+		while (object.find()) {
+			Matcher data = AUDIO_DATA.matcher(object.group(1));
+			if (!data.find()) {
+				continue;
+			}
+			byte[] chunk = decodeBase64(data.group(1));
+			if (chunk == null) {
+				return text;
+			}
+			pcm.writeBytes(chunk);
+			chars += data.group(1).length();
+			spans.add(new int[] { object.start(1) + data.start(1), object.start(1) + data.end(1) });
+		}
+		if (spans.isEmpty()) {
+			return text;
+		}
+		byte[] bytes = pcm.toByteArray();
+		String type = sniff(bytes);
+		if (type == null) {
+			bytes = wav(bytes, 24_000, 1, 16);
+			type = "audio/wav";
+		}
+		String blobId = keep(bytes, type);
+		StringBuilder out = new StringBuilder(text.length());
+		int at = 0;
+		for (int i = 0; i < spans.size(); i++) {
+			out.append(text, at, spans.get(i)[0]);
+			if (i == 0) {
+				out.append(marker(chars, type, blobId));
+			}
+			at = spans.get(i)[1];
+		}
+		out.append(text, at, text.length());
+		return out.toString();
+	}
+
+	/** Raw PCM samples in a WAV container: the 44-byte header, then the samples as they are. */
+	static byte[] wav(byte[] pcm, int sampleRate, int channels, int bitsPerSample) {
+		int byteRate = sampleRate * channels * bitsPerSample / 8;
+		java.nio.ByteBuffer header = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		header.put("RIFF".getBytes(StandardCharsets.US_ASCII)).putInt(36 + pcm.length)
+			.put("WAVE".getBytes(StandardCharsets.US_ASCII)).put("fmt ".getBytes(StandardCharsets.US_ASCII))
+			.putInt(16).putShort((short) 1).putShort((short) channels).putInt(sampleRate).putInt(byteRate)
+			.putShort((short) (channels * bitsPerSample / 8)).putShort((short) bitsPerSample)
+			.put("data".getBytes(StandardCharsets.US_ASCII)).putInt(pcm.length);
+		byte[] out = new byte[44 + pcm.length];
+		System.arraycopy(header.array(), 0, out, 0, 44);
+		System.arraycopy(pcm, 0, out, 44, pcm.length);
+		return out;
 	}
 
 	static String marker(int chars, @Nullable String type, @Nullable String blobId) {

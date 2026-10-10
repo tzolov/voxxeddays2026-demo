@@ -1210,6 +1210,19 @@ test('a model bean call (no HTTP) is shown like its HTTP twin, and not twice for
 	assert.match(renderCall(run.calls.get('c1'), true), /IllegalStateException: no key/);
 });
 
+test('streamed audio out of a chat completion: the clip the inspector put together, the transcript joined', () => {
+	const sse = ['data: {"choices":[{"delta":{"role":"assistant","audio":{"id":"audio_2","data":"<base64 48000 chars audio/wav blob:0123012301230123>"}}}]}',
+		'data: {"choices":[{"delta":{"audio":{"data":"","transcript":"Brus"}}}]}',
+		'data: {"choices":[{"delta":{"audio":{"transcript":"sels."}}}]}',
+		'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}', 'data: [DONE]'].join('\n\n');
+	const chat = wireOf('openai', '/v1/chat/completions', { body: JSON.stringify({ model: 'gpt-audio-1.5', stream: true, modalities: ['text', 'audio'], messages: [{ role: 'user', content: 'capital of Belgium?' }] }) },
+		{ body: sse, headers: { 'content-type': 'text/event-stream' } });
+	const resp = normResponse(chat);
+	assert.equal(resp.blocks.find((b) => b.type === 'text').text, 'Brussels.');
+	assert.deepEqual(resp.blocks.find((b) => b.type === 'media').media, { blobId: '0123012301230123', type: 'audio/wav', chars: 48000 });
+	assert.equal(resp.usage.output, 9);
+});
+
 test('audio out of a chat completion is a playable clip with its transcript; a Responses image tool result is an image', () => {
 	const chat = wireOf('openai', '/v1/chat/completions', { body: JSON.stringify({ model: 'gpt-audio-1.5', modalities: ['text', 'audio'], messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: '<base64 90000 chars audio/wav blob:1234123412341234>', format: 'wav' } }] }] }) },
 		{ body: JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: null, audio: { id: 'audio_1', data: '<base64 120000 chars audio/wav blob:abcdabcdabcdabcd>', transcript: 'Brussels is the capital of Belgium.' } } }], usage: { prompt_tokens: 40, completion_tokens: 60 } }) });

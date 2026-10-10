@@ -406,7 +406,10 @@ Spring AI has its own vector store observations, but they fire only when the sto
   by name and size.
 - Beans of a routed provider are not wrapped: their calls are on the wire already. The inspector also drops a
   bean's call when an HTTP round-trip of the same kind was recorded for the same call meanwhile.
-- Streamed speech and transcription (`stream`) pass through unobserved.
+- A streamed speech or transcription call (`stream`) is reported once, when the stream completes, with the
+  chunks put together (the audio bytes, the text) and marked `streamed`; the stream reaches the app untouched.
+  The interface's convenience methods (`call(String)`, `stream(String)`, `transcribe`, `streamTranscribe`) call
+  the prompt method on the bean itself, past the proxy, so only calls made with a prompt are seen.
 
 ### 6. MCP client transports
 

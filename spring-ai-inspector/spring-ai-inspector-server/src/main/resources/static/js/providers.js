@@ -131,6 +131,12 @@ export const ADAPTERS = {
 					if (typeof c.delta?.content === 'string') choice.content += c.delta.content;
 					else if (Array.isArray(c.delta?.content)) choice.content = [...openAiParts(choice.content), ...openAiParts(c.delta.content)];
 					if (c.delta?.reasoning_content) choice.reasoning_content += c.delta.reasoning_content;
+					if (c.delta?.audio) { // audio out, streamed: the inspector put the clip together under the first delta
+						const a = choice.audio ||= { id: '', data: '', transcript: '' };
+						if (c.delta.audio.id) a.id = c.delta.audio.id;
+						if (c.delta.audio.data) a.data += c.delta.audio.data;
+						if (c.delta.audio.transcript) a.transcript += c.delta.audio.transcript;
+					}
 					for (const d of c.delta?.tool_calls || []) {
 						const tc = choice.tool_calls[d.index] ||= { id: '', function: { name: '', arguments: '' } };
 						if (d.id) tc.id = d.id;
