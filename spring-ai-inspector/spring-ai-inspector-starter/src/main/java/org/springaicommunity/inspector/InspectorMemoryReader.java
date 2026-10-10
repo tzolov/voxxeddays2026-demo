@@ -25,8 +25,8 @@ import org.springframework.ai.chat.messages.Message;
  * <li>{@code chat-memory}: any {@link ChatMemory} field (e.g. MessageChatMemoryAdvisor)</li>
  * <li>{@code session}: a spring-ai-session {@code SessionService} field
  * (SessionMemoryAdvisor), read reflectively, including archived (compacted) events</li>
- * <li>{@code files}: configured memory directories (e.g. 19-auto-memory's
- * {@code agent.memory.dir})</li>
+ * <li>{@code files}: the directories named by {@code spring.ai.inspector.memory-dirs} (e.g.
+ * 19-auto-memory sets it to its {@code agent.memory.dir})</li>
  * </ul>
  */
 class InspectorMemoryReader {

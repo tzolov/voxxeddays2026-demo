@@ -676,7 +676,7 @@ Google GenAI and Bedrock (Converse) are not proxied. Those apps still show their
 |---|---|---|
 | `spring.ai.inspector.enabled` | `true` | `false` turns the starter off completely: no ping, no routing |
 | `spring.ai.inspector.url` | `http://localhost:9001` | where the inspector runs |
-| `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders to show as file-based memory |
+| `spring.ai.inspector.memory-dirs` | | comma-separated folders to show as file-based memory (19-auto-memory sets `${agent.memory.dir}`) |
 | `spring.ai.inspector.routes.<provider>.*` | the built-in table | `properties`, `default-hosts`, `mode`, `upstream`, `suffix`, `enabled` of a route, see [Route other model providers](#6-route-other-model-providers) |
 | `spring.ai.inspector.route.openai`, `spring.ai.inspector.proxy.<name>` | | the older spellings of `routes.openai.mode=always` and `routes.<name>.properties=...` |
 | `spring.ai.inspector.token` | | the inspector's `spring.ai.inspector.token`, when it has one; sent with every event |

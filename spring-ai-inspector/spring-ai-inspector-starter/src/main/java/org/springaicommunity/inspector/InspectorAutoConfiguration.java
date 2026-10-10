@@ -41,8 +41,8 @@ public class InspectorAutoConfiguration {
 
 	@Bean
 	InspectorMemoryReader inspectorMemoryReader(Environment env) {
-		// Memory directories to snapshot; defaults to 19-auto-memory's agent.memory.dir.
-		String dirs = env.getProperty("spring.ai.inspector.memory-dirs", env.getProperty("agent.memory.dir", ""));
+		// Memory directories to snapshot: none unless the app names them (e.g. spring.ai.inspector.memory-dirs=${agent.memory.dir}).
+		String dirs = env.getProperty("spring.ai.inspector.memory-dirs", "");
 		return new InspectorMemoryReader(java.util.Arrays.stream(dirs.split(","))
 			.map(String::trim)
 			.filter(d -> !d.isEmpty())

@@ -63,7 +63,7 @@ last event pointing at it has been dropped from the log.
   without an ObservationRegistry.
 - **Memory after this call** step (03, 09, 19, 20): what each memory store holds after the call, with the entries this
   call wrote highlighted. Chat memory (any advisor holding a `ChatMemory`), spring-ai-session events (archived and
-  summary events marked), and memory files (`spring.ai.inspector.memory-dirs`, defaults to `agent.memory.dir`).
+  summary events marked), and memory files (the folders named by `spring.ai.inspector.memory-dirs`).
 - Runs of 3+ systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire". systemOne
   round-trips are labelled with who served them, e.g. `typesafe · system-one` or `ollama · system-one`.
 - Embedding calls (OpenAI-compatible `/embeddings`, Ollama `/api/embed`) show their model, inputs, vectors and prompt
@@ -171,7 +171,7 @@ Settings, for the instrumented applications:
 |---|---|---|
 | `spring.ai.inspector.enabled` | `true` | set to `false` to opt a demo out |
 | `spring.ai.inspector.url` | `http://localhost:9001` | where the inspector runs |
-| `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders shown as file-based memory |
+| `spring.ai.inspector.memory-dirs` | | comma-separated folders shown as file-based memory (19 sets `${agent.memory.dir}`) |
 | `spring.ai.inspector.routes.<provider>.*` | the built-in table | changes or extends the routing table (`properties`, `default-hosts`, `mode`, `upstream`, `suffix`, `enabled`); `route.openai` and `proxy.<name>` are the older spellings |
 
 The starter only routes traffic when `<url>/api/ping` identifies itself as the inspector, so another service on the
