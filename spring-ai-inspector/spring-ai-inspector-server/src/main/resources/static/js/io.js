@@ -1,3 +1,5 @@
+import { apiHeaders } from './state.js';
+
 // ---------------------------------------------------------------- export / import
 export function exportRun(run) {
 	const blob = new Blob([JSON.stringify(run.events, null, 1)], { type: 'application/json' });
@@ -15,7 +17,7 @@ export async function importFiles(files) {
 			if (!Array.isArray(events)) throw new Error('not an exported run');
 			// Imported on the server so the run survives page reloads; it arrives over the stream.
 			await fetch('api/import?name=' + encodeURIComponent(file.name), {
-				method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(events) });
+				method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(events) });
 		}
 		catch (e) { alert(`Could not import ${file.name}: ${e.message}`); }
 	}

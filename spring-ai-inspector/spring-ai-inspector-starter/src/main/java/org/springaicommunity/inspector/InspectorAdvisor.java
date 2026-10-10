@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import reactor.core.publisher.Flux;
 
@@ -47,6 +48,13 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	static final String CALL_ID = "inspector.callId";
+
+	/**
+	 * Advisor context keys whose values are never reported: the context is the app's own
+	 * (a ToolContext, a tenant's credentials) and it leaves the JVM with the event.
+	 */
+	static final Pattern SECRET_KEY = Pattern
+		.compile("(?i)api[-_ ]?key|secret|password|passwd|credential|authorization|access[-_ ]?token|auth[-_ ]?token|bearer");
 
 	/** Open CLIENT calls on this thread, so nested ChatClient calls (sub-agents) form a tree. */
 	private static final ThreadLocal<Deque<String>> OPEN_CALLS = ThreadLocal.withInitial(ArrayDeque::new);
@@ -343,6 +351,10 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		Map<String, Object> c = new LinkedHashMap<>();
 		context.forEach((key, value) -> {
 			if (CALL_ID.equals(key)) {
+				return;
+			}
+			if (SECRET_KEY.matcher(key).find()) {
+				c.put(key, "…redacted");
 				return;
 			}
 			// Retrieved documents (RAG) keep their structure: id, score, text, metadata.

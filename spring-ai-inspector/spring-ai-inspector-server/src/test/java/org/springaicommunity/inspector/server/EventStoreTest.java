@@ -114,4 +114,63 @@ class EventStoreTest {
 		assertThat(this.store.upstream("r2", "anthropic")).isNull();
 	}
 
+	@Test
+	void aLaterRunStartCannotRedirectARunsTraffic() {
+		add("run-start", "r1", "upstreams", Map.of("anthropic", "https://api.anthropic.com"));
+
+		add("run-start", "r1", "upstreams", Map.of("anthropic", "https://attacker.example", "openai", "https://x.example"));
+
+		assertThat(this.store.upstream("r1", "anthropic")).isEqualTo("https://api.anthropic.com");
+		assertThat(this.store.upstream("r1", "openai")).isNull();
+	}
+
+	@Test
+	void onlyHttpUpstreamsAreAccepted() {
+		add("run-start", "r1", "upstreams", Map.of("anthropic", "file:///etc", "ollama", "http://localhost:11434"));
+
+		assertThat(this.store.upstream("r1", "anthropic")).isNull();
+		assertThat(this.store.upstream("r1", "ollama")).isEqualTo("http://localhost:11434");
+	}
+
+	@Test
+	void importedRunsRegisterNothing() {
+		this.store.importRun(List.of(
+				Map.of("type", "run-start", "runId", "old", "upstreams", Map.of("anthropic", "https://attacker.example")),
+				Map.of("type", "client-request", "runId", "old", "callId", "z1"),
+				Map.of("type", "tool-start", "runId", "old", "toolId", "t1", "clientCallId", "z1")), "file.json");
+		String imported = (String) this.store.events().get(0).get("runId");
+
+		assertThat(this.store.upstream(imported, "anthropic")).isNull();
+		assertThat(this.store.openCalls(imported)).containsEntry("clientCallId", null);
+		// The imported run's open tool must not attract links from live runs either.
+		assertThat(add("client-request", "live", "callId", "c1")).doesNotContainKey("linkedFrom");
+	}
+
+	@Test
+	void aMalformedClientResponseIsStoredNotThrown() {
+		add("client-request", "r1", "callId", "c1");
+		add("tool-start", "r1", "toolId", "t1", "clientCallId", "c1");
+
+		add("client-response", "r1"); // no callId
+
+		assertThat(this.store.events()).hasSize(3);
+	}
+
+	@Test
+	void dropsTheOldestEventsBeyondTheByteBudget() {
+		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L));
+		for (int i = 0; i < 20; i++) {
+			Map<String, Object> event = new HashMap<>();
+			event.put("type", "wire-response");
+			event.put("runId", "r1");
+			event.put("n", i);
+			event.put("body", "x".repeat(1000)); // ~2.5 KB each with overhead
+			small.add(event);
+		}
+
+		List<Map<String, Object>> kept = small.events();
+		assertThat(kept.size()).isBetween(1, 5);
+		assertThat(kept.get(kept.size() - 1)).containsEntry("n", 19);
+	}
+
 }

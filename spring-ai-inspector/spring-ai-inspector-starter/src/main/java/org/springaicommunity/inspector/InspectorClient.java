@@ -49,20 +49,29 @@ public class InspectorClient {
 
 	private final String runId;
 
+	/** Shared secret the inspector requires on its event API, if it has one configured. */
+	private final String token;
+
 	private volatile long pausedUntil;
 
 	/** Delivers a serialized event; HTTP POST to the inspector, replaceable in tests. */
 	private final Consumer<String> transport;
 
 	public InspectorClient(String url, String runId) {
+		this(url, runId, null);
+	}
+
+	public InspectorClient(String url, String runId, String token) {
 		this.eventsUri = URI.create(url + "/api/events");
 		this.runId = runId;
+		this.token = token == null || token.isBlank() ? null : token;
 		this.transport = this::post;
 	}
 
 	InspectorClient(String runId, Consumer<String> transport) {
 		this.eventsUri = null;
 		this.runId = runId;
+		this.token = null;
 		this.transport = transport;
 	}
 
@@ -146,12 +155,14 @@ public class InspectorClient {
 			return;
 		}
 		try {
-			HttpRequest request = HttpRequest.newBuilder(this.eventsUri)
+			HttpRequest.Builder request = HttpRequest.newBuilder(this.eventsUri)
 				.timeout(Duration.ofSeconds(1))
 				.header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(body))
-				.build();
-			this.httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+				.POST(HttpRequest.BodyPublishers.ofString(body));
+			if (this.token != null) {
+				request.header("X-Inspector-Token", this.token);
+			}
+			this.httpClient.send(request.build(), HttpResponse.BodyHandlers.discarding());
 		}
 		catch (InterruptedException ex) {
 			Thread.currentThread().interrupt();

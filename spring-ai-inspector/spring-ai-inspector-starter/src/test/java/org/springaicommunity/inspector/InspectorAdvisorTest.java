@@ -52,6 +52,20 @@ class InspectorAdvisorTest {
 	}
 
 	@Test
+	void secretLookingContextKeysAreRedacted() {
+		chatClient().prompt("hi")
+			.advisors(a -> a.param("tenant", "acme").param("apiKey", "sk-live-1").param("access_token", "t0k").param("tokens", 12))
+			.call()
+			.content();
+
+		Map<String, Object> context = (Map<String, Object>) this.events.get(0).get("context");
+		assertThat(context).containsEntry("tenant", "acme")
+			.containsEntry("apiKey", "…redacted")
+			.containsEntry("access_token", "…redacted")
+			.containsEntry("tokens", "12"); // a count, not a credential
+	}
+
+	@Test
 	void marksThinkingGenerations() {
 		ChatModel thinking = prompt -> new ChatResponse(List.of(
 				new Generation(AssistantMessage.builder().content("").properties(Map.of("signature", "sig")).build()),

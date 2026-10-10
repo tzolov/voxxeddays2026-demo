@@ -36,7 +36,7 @@ public class InspectorAutoConfiguration {
 	@Bean
 	InspectorClient inspectorClient(Environment env) {
 		return new InspectorClient(env.getProperty("spring.ai.inspector.url", "http://localhost:9001"),
-				env.getRequiredProperty("spring.ai.inspector.run-id"));
+				env.getRequiredProperty("spring.ai.inspector.run-id"), env.getProperty("spring.ai.inspector.token"));
 	}
 
 	@Bean

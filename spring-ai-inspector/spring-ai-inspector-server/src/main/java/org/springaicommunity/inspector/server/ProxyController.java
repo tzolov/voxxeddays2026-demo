@@ -8,14 +8,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.zip.GZIPInputStream;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -28,12 +26,16 @@ import org.springframework.web.bind.annotation.RestController;
  * Recording reverse proxy (a built-in replacement for mitmweb). Demos call
  * {@code /r/<runId>/<provider>/v1/...}; the request is forwarded to the provider's
  * upstream, the response is streamed back unchanged, and both are published as
- * {@code wire-request} / {@code wire-response} events with API keys redacted.
+ * {@code wire-request} / {@code wire-response} events, shaped by {@link WireCapture}:
+ * secrets redacted, inline base64 stripped, bodies capped, binary bodies by size only.
  *
  * <p>The upstream is the base URL the application originally had for that provider (the
  * starter reports it in {@code run-start}, so custom gateways keep working), falling back
- * to {@code spring.ai.inspector.upstreams.<provider>}. Because the run decides where its
- * traffic goes, the server listens on localhost only by default.
+ * to {@code spring.ai.inspector.upstreams.<provider>}. A run's upstreams are fixed by its
+ * first {@code run-start} (see {@link EventStore}), so a later event can't redirect its
+ * calls elsewhere. When {@code spring.ai.inspector.token} is set, only runs registered with
+ * the token are served: the fallback upstreams are then off, as the proxy route itself
+ * carries no token.
  */
 @RestController
 public class ProxyController {
@@ -45,9 +47,6 @@ public class ProxyController {
 	private static final Set<String> SKIP_RESPONSE_HEADERS = Set.of("content-length", "connection",
 			"transfer-encoding", "keep-alive", ":status");
 
-	private static final Set<String> SECRET_HEADERS = Set.of("x-api-key", "authorization", "api-key",
-			"x-goog-api-key", "openai-organization", "openai-project");
-
 	private final HttpClient httpClient = HttpClient.newBuilder()
 		.version(HttpClient.Version.HTTP_1_1)
 		.connectTimeout(Duration.ofSeconds(10))
@@ -57,9 +56,15 @@ public class ProxyController {
 
 	private final Map<String, String> upstreams;
 
-	public ProxyController(EventStore store, InspectorProperties properties) {
+	private final boolean registeredRunsOnly;
+
+	private final WireCapture capture;
+
+	public ProxyController(EventStore store, InspectorProperties properties, AccessFilter access) {
 		this.store = store;
 		this.upstreams = properties.upstreams() == null ? Map.of() : properties.upstreams();
+		this.registeredRunsOnly = access.requiresToken();
+		this.capture = new WireCapture(properties.maxBodyChars());
 	}
 
 	@RequestMapping("/r/{runId}/{provider}/**")
@@ -67,11 +72,13 @@ public class ProxyController {
 			HttpServletResponse response) throws IOException {
 
 		String upstream = this.store.upstream(runId, provider);
-		if (upstream == null) {
+		if (upstream == null && !this.registeredRunsOnly) {
 			upstream = this.upstreams.get(provider);
 		}
 		if (upstream == null) {
-			response.sendError(404, "Unknown provider '" + provider + "', configure spring.ai.inspector.upstreams." + provider);
+			response.sendError(404, this.registeredRunsOnly
+					? "Unknown run '" + runId + "': only runs registered with the inspector token are proxied"
+					: "Unknown provider '" + provider + "', configure spring.ai.inspector.upstreams." + provider);
 			return;
 		}
 
@@ -93,20 +100,21 @@ public class ProxyController {
 			for (String value : Collections.list(request.getHeaders(name))) {
 				upstreamRequest.header(name, value);
 			}
-			requestHeaders.put(name, redact(name, request.getHeader(name)));
+			requestHeaders.put(name, WireCapture.redactHeader(name, request.getHeader(name)));
 		}
 
 		String wireId = UUID.randomUUID().toString().substring(0, 8);
+		String shownQuery = WireCapture.redactQuery(request.getQueryString());
 		Map<String, Object> wireRequest = new LinkedHashMap<>();
 		wireRequest.put("type", "wire-request");
 		wireRequest.put("runId", runId);
 		wireRequest.put("wireId", wireId);
 		wireRequest.put("provider", provider);
 		wireRequest.put("method", request.getMethod());
-		wireRequest.put("url", upstream + path + query);
+		wireRequest.put("url", upstream + path + shownQuery);
 		wireRequest.put("path", path);
 		wireRequest.put("headers", requestHeaders);
-		wireRequest.put("body", new String(body, StandardCharsets.UTF_8));
+		this.capture.body(wireRequest, body, request.getContentType(), request.getHeader("content-encoding"));
 		wireRequest.putAll(this.store.openCalls(runId));
 		this.store.add(wireRequest);
 
@@ -136,7 +144,7 @@ public class ProxyController {
 				return;
 			}
 			values.forEach(value -> response.addHeader(name, value));
-			responseHeaders.put(name, String.join(", ", values));
+			responseHeaders.put(name, WireCapture.redactHeader(name, String.join(", ", values)));
 		});
 
 		// Stream through chunk by chunk (keeps SSE streaming responses live) and keep a copy.
@@ -161,29 +169,11 @@ public class ProxyController {
 			wireResponse.put("status", upstreamResponse.statusCode());
 			wireResponse.put("durationMs", System.currentTimeMillis() - start);
 			wireResponse.put("headers", responseHeaders);
-			wireResponse.put("body", decode(copy.toByteArray(),
-					upstreamResponse.headers().firstValue("content-encoding").orElse("")));
+			this.capture.body(wireResponse, copy.toByteArray(),
+					upstreamResponse.headers().firstValue("content-type").orElse(null),
+					upstreamResponse.headers().firstValue("content-encoding").orElse(null));
 			this.store.add(wireResponse);
 		}
-	}
-
-	private static String redact(String name, String value) {
-		if (!SECRET_HEADERS.contains(name.toLowerCase()) || value == null) {
-			return value;
-		}
-		return value.substring(0, Math.min(value.length(), 7)) + "…redacted";
-	}
-
-	private static String decode(byte[] bytes, String contentEncoding) {
-		if (contentEncoding.toLowerCase().contains("gzip")) {
-			try (InputStream in = new GZIPInputStream(new java.io.ByteArrayInputStream(bytes))) {
-				return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-			}
-			catch (IOException ex) {
-				return "<gzip body could not be decoded: " + ex.getMessage() + ">";
-			}
-		}
-		return new String(bytes, StandardCharsets.UTF_8);
 	}
 
 }

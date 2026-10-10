@@ -116,6 +116,18 @@ export function renderNormResponse(wire) {
 	return `<div class="params">${params}</div><div class="msgs">${renderWireMessage('assistant', r.blocks)}</div>`;
 }
 
+/**
+ * A recorded body as the proxy shaped it: text (possibly cut at the inspector's limit, with
+ * its full size), or a binary body (audio, an image) recorded by type and size only.
+ */
+export function renderRawBody(side) {
+	if (side.bodyKind === 'binary') {
+		return `<div class="notice info">binary body · ${esc(side.contentType || 'unknown type')} · ${fmtNum(side.size)} bytes${side.note ? ` · ${esc(side.note)}` : ''} (not recorded)</div>`;
+	}
+	const cut = side.truncated ? `<div class="notice info">cut at ${fmtNum(String(side.body ?? '').length)} of ${fmtNum(side.size)} characters (spring.ai.inspector.max-body-chars)</div>` : '';
+	return `${cut}<pre class="json">${prettyMaybeJson(side.body)}</pre>`;
+}
+
 export function renderHeaders(h) {
 	if (!h) return '';
 	return `<table class="headers">${Object.entries(h).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
@@ -299,9 +311,9 @@ export function renderWire(wire) {
 			<div><div class="col-title">→ request to ${esc(nreq.params.model || wire.req.provider)}</div>${renderNormRequest(nreq, previousConversation(wire), wire.id)}</div>
 			<div><div class="col-title">← response</div>${renderNormResponse(wire)}</div></div></div>`;
 	}
-	body += `<div class="pane ${tab === 'req' ? 'on' : ''}" data-pane="req"><div class="col-title">${esc(wire.req.url)}</div><pre class="json">${prettyMaybeJson(wire.req.body)}</pre></div>`;
-	const respBody = wire.resp ? (wire.resp.error ? esc(wire.resp.error) : prettyMaybeJson(wire.resp.body)) : '<span class="spinner"></span> waiting…';
-	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">${wire.inProcess ? 'in-process' : `HTTP ${esc(wire.resp?.status ?? '…')}`}</div><pre class="json">${respBody}</pre></div>`;
+	body += `<div class="pane ${tab === 'req' ? 'on' : ''}" data-pane="req"><div class="col-title">${esc(wire.req.url)}</div>${renderRawBody(wire.req)}</div>`;
+	const respBody = wire.resp ? (wire.resp.error ? `<pre class="json">${esc(wire.resp.error)}</pre>` : renderRawBody(wire.resp)) : '<pre class="json"><span class="spinner"></span> waiting…</pre>';
+	body += `<div class="pane ${tab === 'resp' ? 'on' : ''}" data-pane="resp"><div class="col-title">${wire.inProcess ? 'in-process' : `HTTP ${esc(wire.resp?.status ?? '…')}`}</div>${respBody}</div>`;
 	if (!wire.inProcess) body += `<div class="pane ${tab === 'hdr' ? 'on' : ''}" data-pane="hdr"><div class="cols">
 		<div><div class="col-title">request headers</div>${renderHeaders(wire.req.headers)}</div>
 		<div><div class="col-title">response headers</div>${renderHeaders(wire.resp?.headers)}</div></div></div>`;

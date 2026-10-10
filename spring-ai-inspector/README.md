@@ -158,8 +158,31 @@ Settings, for the inspector server:
 |---|---|---|
 | `server.port` | `9001` | |
 | `server.address` | `127.0.0.1` | local only: the event stream contains prompts, tool results and memory contents |
-| `spring.ai.inspector.upstreams.<provider>` | provider APIs | fallback upstream when a run didn't report its own |
+| `spring.ai.inspector.upstreams.<provider>` | provider APIs | fallback upstream when a run didn't report its own (off when a token is set) |
 | `spring.ai.inspector.preload-dir` | | folder of exported runs to load at startup |
+| `spring.ai.inspector.token` | | shared secret; when set, `/api/**` needs it and the proxy serves only runs that registered with it |
+| `spring.ai.inspector.allowed-hosts` | | extra `Host` names accepted next to `localhost` / `127.0.0.1` |
+| `spring.ai.inspector.max-body-chars` | `512000` | longest recorded request/response body; longer ones are cut and marked |
+| `spring.ai.inspector.max-total-bytes` | `268435456` | byte budget of the in-memory event log (oldest events dropped) |
+| `spring.ai.inspector.max-request-bytes` | `16777216` | largest event post accepted |
+
+## Access and what gets recorded
+
+The inspector sees everything the apps send: prompts, tool results, memory files, MCP messages, and the
+`run-start` event tells the proxy where to forward each run's API keys. So:
+
+- It listens on `127.0.0.1` and refuses requests whose `Host` header is not a loopback name (a page in your own
+  browser whose DNS name points at 127.0.0.1 would otherwise read the stream). Listening on another address
+  (`server.address`) accepts that address too; name more with `spring.ai.inspector.allowed-hosts`.
+- A run's upstreams are fixed by its first `run-start` and must be `http(s)` URLs; a later event can't redirect
+  a run. Imported recordings register nothing.
+- To require a secret, set `spring.ai.inspector.token` on the server and in the apps. The UI gets it once from
+  the address bar, `http://localhost:9001/#token=<value>`, and keeps it in the browser.
+- Secret headers (`x-api-key`, `Authorization`, cookies, ...) and query parameters (`key`, `token`, ...) are
+  recorded as `…redacted`; inline base64 (images, audio, documents) is replaced by a size marker; binary bodies
+  are recorded by type and size only.
+- **Exports and `preload-dir` files contain the recorded prompts, tool results and memory contents.** Treat them
+  like logs.
 
 ## Deep links
 

@@ -574,6 +574,7 @@ Google GenAI and Bedrock (Converse) are not proxied. Those apps still show their
 | `spring.ai.inspector.memory-dirs` | `${agent.memory.dir}` | comma-separated folders to show as file-based memory |
 | `spring.ai.inspector.route.openai` | | `always` routes a non-default OpenAI base URL ending in `/v1` |
 | `spring.ai.inspector.proxy.<name>` | | base-url properties of another provider to route, comma-separated |
+| `spring.ai.inspector.token` | | the inspector's `spring.ai.inspector.token`, when it has one; sent with every event |
 
 The starter sets `spring.ai.inspector.active`, `run-id`, `app`, `models`, `routed` and `upstream.<provider>` for
 itself. Don't set them by hand.
@@ -590,4 +591,6 @@ itself. Don't set them by hand.
 | Model calls fail with "connection refused" to port 9001 | The app was routed through an inspector that has since stopped. Start it again, or restart the app. |
 
 The inspector listens on `127.0.0.1` by default. Its event stream contains prompts, tool results and memory
-contents, so keep it local.
+contents, so keep it local. The starter sends the advisor context too, minus keys that look like secrets
+(`api-key`, `secret`, `password`, `credential`, `authorization`, `access-token`, ...), which are reported as
+`…redacted`.

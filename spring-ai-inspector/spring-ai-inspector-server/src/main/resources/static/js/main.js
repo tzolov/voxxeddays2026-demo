@@ -4,7 +4,7 @@ import { exportRun, importFiles } from './io.js';
 import { handle } from './model.js';
 import { render, syncSequenceHead } from './render/page.js';
 import { replay, startReplay, stepReplay, stopReplay, togglePause } from './replay.js';
-import { pref, savePref, state } from './state.js';
+import { apiHeaders, apiUrl, pref, savePref, state } from './state.js';
 
 // ---------------------------------------------------------------- deep links
 // #run=<runId>&view=cards|sequence&scale=ordered|scaled selects a run and view, e.g. to
@@ -14,6 +14,7 @@ let linkedRun = link.get('run');
 if (link.get('view')) savePref('view', link.get('view'));
 if (link.get('scale')) savePref('seqScale', link.get('scale'));
 if (linkedRun) state.follow = false; // stay on the linked run
+if (link.has('token')) { link.delete('token'); history.replaceState(null, '', '#' + link); } // read by state.js, not kept in the address bar
 
 function updateHash() {
 	const params = new URLSearchParams();
@@ -82,7 +83,7 @@ document.getElementById('palette').addEventListener('click', () => {
 	savePref('palette', pref('palette', '') === 'spring' ? '' : 'spring');
 	applyPrefs();
 });
-document.getElementById('clear').addEventListener('click', () => fetch('api/events', { method: 'DELETE' }));
+document.getElementById('clear').addEventListener('click', () => fetch('api/events', { method: 'DELETE', headers: apiHeaders() }));
 
 function applyPrefs() {
 	document.documentElement.style.setProperty('--scale', pref('scale', '1'));
@@ -144,7 +145,7 @@ document.getElementById('import').addEventListener('click', () => document.getEl
 
 // ---------------------------------------------------------------- live stream
 function connect() {
-	const source = new EventSource('api/stream');
+	const source = new EventSource(apiUrl('api/stream'));
 	const dot = document.getElementById('conn');
 	source.onopen = () => {
 		// The server replays everything on (re)connect.
