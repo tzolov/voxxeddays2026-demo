@@ -32,7 +32,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * The proxy route carries no token (the model SDKs can't add one) and instead serves only
  * runs registered with the token, see {@link ProxyController}.</li>
  * <li>Request bodies are capped: events at {@code max-request-bytes}, recordings posted to
- * {@code /api/import} at {@code max-import-bytes}.</li>
+ * {@code /api/import} at {@code max-import-bytes}, media posted to {@code /api/blobs} at
+ * {@code max-blob-size}.</li>
  * </ul>
  */
 @Component
@@ -53,12 +54,15 @@ public class AccessFilter extends OncePerRequestFilter {
 
 	private final long maxImportBytes;
 
+	private final long maxBlobSize;
+
 	public AccessFilter(InspectorProperties properties, @Value("${server.address:}") String address) {
 		this.allowedHosts = allowedHosts(properties, address);
 		this.token = properties.token() == null || properties.token().isBlank() ? null
 				: properties.token().getBytes(StandardCharsets.UTF_8);
 		this.maxRequestBytes = properties.maxRequestBytes();
 		this.maxImportBytes = properties.maxImportBytes();
+		this.maxBlobSize = properties.maxBlobSize();
 	}
 
 	private static @Nullable Set<String> allowedHosts(InspectorProperties properties, String address) {
@@ -102,14 +106,27 @@ public class AccessFilter extends OncePerRequestFilter {
 				response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "spring.ai.inspector.token required");
 				return;
 			}
-			boolean importing = "/api/import".equals(path);
-			if (request.getContentLengthLong() > (importing ? this.maxImportBytes : this.maxRequestBytes)) {
-				response.sendError(413, "request body exceeds spring.ai.inspector."
-						+ (importing ? "max-import-bytes" : "max-request-bytes"));
+			Limit limit = limitFor(path);
+			if (request.getContentLengthLong() > limit.bytes()) {
+				response.sendError(413, "request body exceeds spring.ai.inspector." + limit.property());
 				return;
 			}
 		}
 		chain.doFilter(request, response);
+	}
+
+	private record Limit(String property, long bytes) {
+	}
+
+	/** The body cap of a path: recordings, media and events have their own. */
+	private Limit limitFor(String path) {
+		if ("/api/import".equals(path)) {
+			return new Limit("max-import-bytes", this.maxImportBytes);
+		}
+		if (path.startsWith("/api/blobs")) {
+			return new Limit("max-blob-size", this.maxBlobSize);
+		}
+		return new Limit("max-request-bytes", this.maxRequestBytes);
 	}
 
 	private boolean tokenMatches(HttpServletRequest request) {

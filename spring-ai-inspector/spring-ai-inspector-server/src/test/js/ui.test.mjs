@@ -1040,6 +1040,7 @@ test('media markers: kept blobs, provider URLs and stripped payloads are told ap
 	assert.match(img, /<img class="media" src="api\/blobs\/abc"/);
 	assert.match(renderMedia({ blobId: 'abc', type: 'audio/mpeg', size: 70521 }), /<audio class="media" controls[^>]*src="api\/blobs\/abc"/);
 	assert.match(renderMedia({ chars: 2000, type: 'image/png' }), /not kept/);
+	assert.match(renderMedia({ blobId: 'abc', type: '' }), /<img class="media"/); // untyped: tried as an image, says "no preview" if not
 	assert.match(renderMedia({ url: 'https://x.example/<script>' }), /&lt;script&gt;/);
 	assert.doesNotMatch(renderMedia({ url: 'https://x.example/<script>' }), /<script>/);
 	// A chat message with an inline image shows it.
@@ -1120,4 +1121,31 @@ test('an image a tool returned is shown in its tool result', () => {
 	const html = renderBlock(block);
 	assert.match(html, /the chart/);
 	assert.match(html, /<img class="media" src="api\/blobs\/abcdabcdabcdabcd"/);
+});
+
+test('a model bean call (no HTTP) is shown like its HTTP twin, and not twice for a routed provider', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'mc', app: 'beans', ts: 1, routed: ['openai'] });
+	handle({ type: 'client-request', runId: 'mc', callId: 'c1', seq: 1, ts: 2, messages: [{ role: 'user', text: 'draw' }] });
+	// An image model in the JVM, with its image uploaded by the starter.
+	handle({ type: 'model-call', runId: 'mc', modelCallId: 'm1', clientCallId: 'c1', kind: 'image', modelType: 'ImageModel', provider: 'stabilityai', model: 'sd3',
+		seq: 2, ts: 900, durationMs: 850, request: { params: { model: 'sd3', n: 1 }, prompt: 'a lighthouse' },
+		response: { images: [{ media: { blobId: 'aaaaaaaaaaaaaaaa', type: 'image/png', size: 12345 } }] } });
+	// A speech model of a routed provider: already on the wire, so skipped here.
+	handle({ type: 'model-call', runId: 'mc', modelCallId: 'm2', clientCallId: 'c1', kind: 'speech', modelType: 'TextToSpeechModel', provider: 'openai', model: 'tts-1',
+		seq: 3, ts: 1000, durationMs: 50, request: { params: { model: 'tts-1', voice: 'nova' }, text: 'hi' }, response: { audio: { blobId: 'bbbbbbbbbbbbbbbb', type: 'audio/mpeg', size: 10 } } });
+	const run = state.runs.get('mc');
+	assert.equal(run.wireList.length, 1);
+	const w = run.wireList[0];
+	assert.equal(adapterOf(w).kind, 'image');
+	assert.equal(normRequest(w).prompt, 'a lighthouse');
+	const html = renderCall(run.calls.get('c1'), true);
+	assert.match(html, /ImageModel call · no HTTP/);
+	assert.match(html, /api\/blobs\/aaaaaaaaaaaaaaaa/);
+	assert.match(html, /stabilityai/);
+	assert.match(renderSequence(run, false), /image/);
+	// A failed call says so.
+	handle({ type: 'model-call', runId: 'mc', modelCallId: 'm3', clientCallId: 'c1', kind: 'moderation', modelType: 'ModerationModel', provider: 'mistralai', model: 'mistral-moderation-latest',
+		seq: 4, ts: 1100, durationMs: 5, request: { params: { model: 'x' }, inputs: [{ type: 'text', text: 'hi' }] }, error: 'IllegalStateException: no key' });
+	assert.match(renderCall(run.calls.get('c1'), true), /IllegalStateException: no key/);
 });

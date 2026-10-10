@@ -106,6 +106,19 @@ export function handle(ev) {
 			(call ? call.items : run.items).push({ kind: 'wire', ref: wire });
 			break;
 		}
+		case 'model-call': {
+			// A model bean the starter observed (an image, speech, transcription or moderation model) that
+			// made no HTTP round-trip the proxy saw: a model in the JVM, or an SDK with no base URL to
+			// rewrite. Shown as a round-trip of its own, through the same adapter as its HTTP twin; a
+			// routed provider's calls are already on the wire.
+			if (run.routed?.has(ev.provider) || onTheWireKind(run, ev)) break;
+			const wire = inProcessModelCall(run, ev);
+			run.wires.set(wire.id, wire);
+			run.wireList.push(wire);
+			const call = run.calls.get(ev.clientCallId);
+			(call ? call.items : run.items).push({ kind: 'wire', ref: wire });
+			break;
+		}
 		case 'vector-start': {
 			// A search or an add starting: shown (open) right away, completed by its end event, so
 			// the embedding calls the store makes meanwhile are drawn inside it as they happen.
@@ -153,6 +166,37 @@ function onTheWire(run, ev) {
 		if (at <= end && w.req.provider === ev.provider && (w.req.clientCallId ?? null) === (ev.clientCallId ?? null)) return true;
 	}
 	return false;
+}
+
+/** The proxy path of a model kind, so the synthetic round-trip picks the same adapter as an HTTP one. */
+const PATH_OF_KIND = { image: '/v1/images/generations', speech: '/v1/audio/speech', transcription: '/v1/audio/transcriptions', moderation: '/v1/moderations' };
+
+/** Whether an HTTP round-trip of the same kind, provider and call was recorded while the model call ran. */
+function onTheWireKind(run, ev) {
+	const end = recordedTs(ev); const start = end - (ev.durationMs || 0);
+	for (let i = run.wireList.length - 1; i >= 0; i--) {
+		const w = run.wireList[i]; const at = recordedTs(w.req);
+		if (at < start) break;
+		if (at <= end && !w.inProcess && w.req.provider === ev.provider && adapterOf(w)?.kind === ev.kind
+			&& (w.req.clientCallId ?? null) === (ev.clientCallId ?? null)) return true;
+	}
+	return false;
+}
+
+/** A round-trip for a model call made in the JVM, in the adapter's normalized shape (see providers.js). */
+function inProcessModelCall(run, ev) {
+	const replayed = ev.recordedTs != null;
+	const start = recordedTs(ev) - (ev.durationMs || 0);
+	const wire = { id: 'mc:' + ev.modelCallId, inProcess: true, inProcessLabel: `${ev.modelType || 'Model'} call · no HTTP`,
+		num: run.wireList.length + 1, prev: run.wireList[run.wireList.length - 1] || null,
+		req: { provider: ev.provider, method: '', path: PATH_OF_KIND[ev.kind] || '/' + ev.kind, url: '', headers: {}, seq: ev.seq - 0.5,
+			ts: ev.ts - (ev.durationMs || 0), ...(replayed ? { recordedTs: start } : {}), clientCallId: ev.clientCallId,
+			body: JSON.stringify(ev.request ?? {}) },
+		resp: { seq: ev.seq, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
+			durationMs: ev.durationMs, headers: {}, body: JSON.stringify(ev.response ?? {}) } };
+	wire._nreq = { params: {}, system: null, tools: [], messages: [], ...(ev.request || {}) };
+	wire._nresp = ev.error ? { error: ev.error } : { blocks: [], usage: null, ...(ev.response || {}) };
+	return wire;
 }
 
 /** A round-trip for an embedding call made in the JVM, normalized like an HTTP one (see providers.js). */

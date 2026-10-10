@@ -44,7 +44,7 @@ export function renderMedia(media) {
 		const src = apiUrl('api/blobs/' + encodeURIComponent(media.blobId));
 		const type = media.type || '';
 		const size = media.size != null ? ` · ${fmtBytes(media.size)}` : media.chars != null ? ` · ${fmtNum(media.chars)} chars` : '';
-		if (type.startsWith('image/')) return `<a class="media-link" href="${esc(src)}" target="_blank"><img class="media" src="${esc(src)}" alt="${esc(type)}" onerror="this.classList.add('gone')"><span class="media-gone tag muted">preview no longer available</span></a><span class="tag muted">${esc(type)}${size}</span>`;
+		if (type.startsWith('image/') || !type) return `<a class="media-link" href="${esc(src)}" target="_blank"><img class="media" src="${esc(src)}" alt="${esc(type)}" onerror="this.classList.add('gone')"><span class="media-gone tag muted">${type ? 'preview no longer available' : 'no preview'}</span></a><span class="tag muted">${esc(type || 'media')}${size}</span>`;
 		if (type.startsWith('audio/')) return `<audio class="media" controls preload="none" src="${esc(src)}"></audio><span class="tag muted">${esc(type)}${size}</span>`;
 		return `<a class="tag" href="${esc(src)}" target="_blank" download>${esc(type || 'file')}${size}</a>`;
 	}
@@ -248,6 +248,7 @@ export function renderSystemOne(wire, nreq, nresp) {
 
 // ---------------------------------------------------------------- embeddings
 const NO_HTTP_EMBEDDING = 'Seen at the embedding model bean: no HTTP traffic was recorded for this call (a model running in the JVM).';
+const NO_HTTP_MODEL = 'Seen at the model bean: no HTTP traffic was recorded for this call (a model running in the JVM, or an SDK the proxy cannot see).';
 const MAX_EMBEDDING_INPUTS = 20;
 
 /** e.g. "1 vector × 1,536" */
@@ -351,7 +352,7 @@ export function renderWire(wire) {
 	const u = nresp && nresp.usage;
 
 	// An in-process call (e.g. an embedding model running in the JVM) has no HTTP request to show.
-	const where = wire.inProcess ? `<span class="path" title="${esc(NO_HTTP_EMBEDDING)}">EmbeddingModel call · no HTTP</span>`
+	const where = wire.inProcess ? `<span class="path" title="${esc(wire.inProcessLabel ? NO_HTTP_MODEL : NO_HTTP_EMBEDDING)}">${esc(wire.inProcessLabel || 'EmbeddingModel call · no HTTP')}</span>`
 		: `<span class="path">${esc(wire.req.method)} ${esc(wire.req.path)}</span>`;
 	let summary = `<span class="chev">▸</span><span class="num">#${wire.num}</span>
 		<span class="pill">${esc(providerLabel(wire))}</span>${where}`;

@@ -49,6 +49,8 @@ public class InspectorClient {
 
 	private final URI eventsUri;
 
+	private final URI blobsUri;
+
 	private final String runId;
 
 	/** Shared secret the inspector requires on its event API, if it has one configured. */
@@ -71,22 +73,46 @@ public class InspectorClient {
 	 */
 	private final Consumer<String> transport;
 
+	/** Uploads media under an id; throws when the inspector can't be reached. See {@link #sendBlob}. */
+	private final BlobUploader blobTransport;
+
+	/** An upload: the id the client minted, the bytes and their type. */
+	@FunctionalInterface
+	interface BlobUploader {
+
+		void upload(String id, byte[] bytes, String contentType);
+
+	}
+
+	/** Media the client reported: the id its event refers to, the type and the size. */
+	public record Media(String id, String contentType, int size) {
+	}
+
 	public InspectorClient(String url, String runId) {
 		this(url, runId, null);
 	}
 
 	public InspectorClient(String url, String runId, String token) {
 		this.eventsUri = URI.create(url + "/api/events");
+		this.blobsUri = URI.create(url + "/api/blobs");
 		this.runId = runId;
 		this.token = token == null || token.isBlank() ? null : token;
 		this.transport = this::httpPost;
+		this.blobTransport = this::httpUpload;
 	}
 
 	InspectorClient(String runId, Consumer<String> transport) {
+		this(runId, transport, (id, bytes, type) -> {
+		});
+	}
+
+	InspectorClient(String runId, Consumer<String> transport, BlobUploader blobs) {
 		this.eventsUri = null;
+		this.blobsUri = null;
 		this.runId = runId;
 		this.token = null;
 		this.transport = transport;
+		this.blobTransport = blobs;
 	}
 
 	/** Builds and posts an event on the calling thread. Never throws. */
@@ -178,6 +204,40 @@ public class InspectorClient {
 		send(type, () -> payload);
 	}
 
+	/**
+	 * Reports the media of a model call made in the JVM (an image generated, speech
+	 * synthesized), so the inspector can show it. Returns at once with the id the event
+	 * should name and the type (the given one, or sniffed from the bytes); the bytes go to
+	 * the inspector from the background thread, ahead of any event posted afterwards with
+	 * {@link #sendAsync}, so an event posted that way never names a blob that hasn't arrived.
+	 * Null when the media isn't reported (empty, too large, publishing paused).
+	 */
+	public Media sendBlob(byte[] bytes, String contentType) {
+		if (bytes == null || bytes.length == 0 || bytes.length > MAX_BLOB || System.currentTimeMillis() < this.pausedUntil) {
+			return null;
+		}
+		String type = InspectorMedia.type(contentType, bytes);
+		String id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+		this.asyncSender.execute(() -> {
+			if (System.currentTimeMillis() < this.pausedUntil) {
+				return;
+			}
+			try {
+				this.blobTransport.upload(id, bytes, type);
+			}
+			catch (RuntimeException ex) {
+				this.down = true;
+				this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
+				System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
+						+ BACKOFF.toSeconds() + "s");
+			}
+		});
+		return new Media(id, type, bytes.length);
+	}
+
+	/** Media larger than this is not uploaded (the inspector keeps items up to its own limit). */
+	static final int MAX_BLOB = 16 * 1024 * 1024;
+
 	private String build(String type, Supplier<Map<String, Object>> payload) {
 		return build(type, payload, System.currentTimeMillis());
 	}
@@ -218,6 +278,30 @@ public class InspectorClient {
 	/** Cuts long text for an event, marking the cut with an ellipsis. */
 	static String truncate(String text, int max) {
 		return text == null || text.length() <= max ? text : text.substring(0, max) + "…";
+	}
+
+	/** Uploads media to the inspector under the client's id; a 4xx (declined) is not a failure. */
+	private void httpUpload(String id, byte[] bytes, String contentType) {
+		try {
+			HttpRequest.Builder request = HttpRequest.newBuilder(this.blobsUri.resolve(this.blobsUri.getPath() + "/" + id))
+				.timeout(Duration.ofSeconds(10))
+				.header("Content-Type", contentType)
+				.PUT(HttpRequest.BodyPublishers.ofByteArray(bytes));
+			if (this.token != null) {
+				request.header("X-Inspector-Token", this.token);
+			}
+			HttpResponse<Void> response = this.httpClient.send(request.build(), HttpResponse.BodyHandlers.discarding());
+			if (response.statusCode() >= 500) {
+				throw new IllegalStateException("HTTP " + response.statusCode());
+			}
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("interrupted", ex);
+		}
+		catch (java.io.IOException ex) {
+			throw new java.io.UncheckedIOException(ex);
+		}
 	}
 
 	/** The HTTP transport: posts to the inspector, throwing when it can't be reached. */

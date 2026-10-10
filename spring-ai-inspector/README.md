@@ -37,6 +37,10 @@ transcript, language and duration) and **moderation** (`/v1/moderations`: each i
 top category scores). Images and audio sent inline in chat messages (vision, audio input) are shown in the
 message too.
 
+The same views show the calls of `ImageModel`, `TextToSpeechModel`, `TranscriptionModel` and `ModerationModel`
+beans that make no HTTP round-trip the proxy sees (a model in the JVM, Google GenAI or Bedrock through their
+SDKs), marked "no HTTP": the starter reports them from the beans, with their media uploaded for previews.
+
 The media itself (inline base64 of a recognized type, binary bodies, uploaded files) is kept out of the
 events, in memory under `spring.ai.inspector.max-blob-bytes`, and served to the UI from `/api/blobs/<id>`; the
 events carry a `<base64 N chars TYPE blob:ID>` marker where the payload was. Long base64 that is not media (an
@@ -146,8 +150,9 @@ How the starter hooks in:
     `spring.ai.inspector.proxy.groq=spring.ai.openai.base-url`. The proxy forwards to that property's value, and the
     inspector recognizes the wire format by the request path (OpenAI-compatible, Anthropic, Ollama, embeddings).
 - Models that make no HTTP calls (e.g. jinfer running in the JVM) or providers that aren't routed are still shown:
-  their round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
-  model and token usage it reported (marked "no HTTP"), in the cards, the tokens panel and the sequence view.
+  chat round-trips come from the advisor right before the model, with the prompt, the response, tool calls, the
+  model and token usage it reported; embedding, image, speech, transcription and moderation calls come from the
+  model beans (all marked "no HTTP"), in the cards, the tokens panel and the sequence view.
 - The run header lists the configured chat models of any provider (`spring.ai.<provider>.chat[.options].model`, and `spring.ai.<provider>.responses.model` for OpenAI's Responses API).
 - It also adds two `InspectorAdvisor`s to every auto-configured `ChatClient.Builder`: one at the start of the
   advisor chain and one right before the model.

@@ -42,6 +42,19 @@ final class InspectorReflection {
 		return values;
 	}
 
+	/** The result of a public no-arg method, or null when the object has none by that name or it fails. */
+	static Object callIfPresent(Object target, String method) {
+		if (target == null) {
+			return null;
+		}
+		try {
+			return target.getClass().getMethod(method).invoke(target);
+		}
+		catch (Exception | LinkageError ex) {
+			return null;
+		}
+	}
+
 	static Object field(Object target, String name) {
 		for (Field field : fields(target)) {
 			if (field.getName().equals(name)) {

@@ -140,6 +140,27 @@ class ProxyControllerTest {
 	}
 
 	@Test
+	void theStarterCanUploadMediaForModelsThatDontGoThroughTheProxy() throws Exception {
+		byte[] png = { (byte) 0x89, 'P', 'N', 'G', 1 };
+		// Under its own id, typed from the bytes when it says octet-stream.
+		HttpResponse<String> put = this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs/0123456789abcdef"))
+			.header("Content-Type", "application/octet-stream")
+			.PUT(HttpRequest.BodyPublishers.ofByteArray(png)).build(), HttpResponse.BodyHandlers.ofString());
+		assertThat(put.statusCode()).isEqualTo(200);
+		assertThat(put.body()).contains("\"contentType\":\"image/png\"");
+		HttpResponse<byte[]> blob = this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs/0123456789abcdef")).build(),
+				HttpResponse.BodyHandlers.ofByteArray());
+		assertThat(blob.headers().firstValue("content-type")).hasValue("image/png");
+		assertThat(blob.body()).hasSize(5);
+		// An id that isn't the starter's shape is refused; a plain POST gets a server id.
+		assertThat(this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs/not-hex!"))
+			.PUT(HttpRequest.BodyPublishers.ofByteArray(png)).build(), HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(400);
+		HttpResponse<String> post = this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs"))
+			.header("Content-Type", "image/png").POST(HttpRequest.BodyPublishers.ofByteArray(png)).build(), HttpResponse.BodyHandlers.ofString());
+		assertThat(post.body()).matches(".*\"id\":\"[0-9a-f]{16}\".*");
+	}
+
+	@Test
 	void redactsSecretQueryParametersButForwardsThem() throws Exception {
 		this.store.add(new java.util.HashMap<>(Map.of("type", "run-start", "runId", "run3", "upstreams",
 				Map.of("google", upstreamUrl()))));

@@ -5,6 +5,7 @@ Auto-configured instrumentation that reports what a Spring AI application does t
 
 - ChatClient calls and the prompt as each advisor leaves it.
 - Model round-trips, both on the HTTP wire and in the JVM.
+- Image, speech, transcription and moderation calls, with their media.
 - Tool runs.
 - Vector store adds and searches.
 - Embedding calls.
@@ -82,6 +83,9 @@ classDiagram
     class InspectorEmbeddingModelPostProcessor {
         +postProcessAfterInitialization(bean, name)
     }
+    class InspectorModelPostProcessor {
+        +postProcessAfterInitialization(bean, name)
+    }
     class InspectorMcpTransportPostProcessor {
         +postProcessAfterInitialization(bean, name)
     }
@@ -116,6 +120,7 @@ classDiagram
     ObservationHandler <|.. InspectorToolObservationHandler
     BeanPostProcessor <|.. InspectorVectorStorePostProcessor
     BeanPostProcessor <|.. InspectorEmbeddingModelPostProcessor
+    BeanPostProcessor <|.. InspectorModelPostProcessor
     BeanPostProcessor <|.. InspectorMcpTransportPostProcessor
     BeanPostProcessor <|.. InspectorMcpToolNamePostProcessor
     McpClientTransport <|.. InspectorMcpClientTransport
@@ -135,6 +140,7 @@ classDiagram
     InspectorToolObservationHandler --> InspectorClient
     InspectorVectorStorePostProcessor --> InspectorClient
     InspectorEmbeddingModelPostProcessor --> InspectorClient
+    InspectorModelPostProcessor --> InspectorClient
     InspectorMcpClientTransport --> InspectorClient
 ```
 
@@ -196,7 +202,7 @@ sequenceDiagram
 | [Recording proxy](#2-the-recording-proxy) | rewritten `spring.ai.<provider>.base-url`, correlation headers via `RestClientCustomizer` / `WebClientCustomizer` / the SDKs' `*HttpClientBuilderCustomizer` | every HTTP request and response to a model provider | `wire-request`, `wire-response` (sent by the server) |
 | [Advisors](#3-chatclient-advisors) | `ChatClientBuilderCustomizer` | the prompt as written and as sent, answers, usage, advisor chain, RAG setup, memory | `client-*`, `model-*`, `memory-snapshot` |
 | [Tool observations](#4-tool-calling-observations) | Micrometer `ObservationHandler` | every tool execution, including MCP tools | `tool-start`, `tool-end` |
-| [Bean proxies](#5-aop-proxies-for-vector-stores-and-embedding-models) | `BeanPostProcessor` + Spring AOP `ProxyFactory` | vector store adds, deletes and searches, embedding calls | `vector-*`, `embedding-call` |
+| [Bean proxies](#5-aop-proxies-for-vector-stores-and-embedding-models) | `BeanPostProcessor` + Spring AOP `ProxyFactory` | vector store adds, deletes and searches, embedding calls, image / speech / transcription / moderation calls | `vector-*`, `embedding-call`, `model-call` |
 | [MCP transport decorator](#6-mcp-client-transports) | `BeanPostProcessor` on the auto-configured transports | every JSON-RPC message, both directions | `mcp-message` |
 | [Read-only reflection](#7-read-only-reflection) | none, read from the advisors' fields | chat memory, session memory, RAG stages | part of `client-request`, `memory-snapshot` |
 
@@ -372,6 +378,23 @@ Spring AI has its own vector store observations, but they fire only when the sto
 - This covers models in the JVM that make no HTTP calls. For remote models the inspector prefers the wire
   round-trip and doesn't count the call twice.
 
+**`InspectorModelPostProcessor`** wraps every `ImageModel`, `TextToSpeechModel`, `TranscriptionModel` and
+`ModerationModel` bean the same way and reports each blocking `call` as a `model-call` event:
+
+- The event carries the call in the shape the inspector's wire adapters produce for the HTTP twin of the
+  call (the prompt and parameters of an image, the text and voice of speech, the file of a transcription,
+  the inputs of a moderation; the images, audio, transcript or verdicts that came back), so the UI shows a
+  model in the JVM or behind an SDK (Google GenAI, Bedrock) exactly like a proxied one, marked "no HTTP".
+- The media of the call is uploaded to the inspector from the background thread (`PUT /api/blobs/<id>`, up
+  to 16 MB an item, under an id the starter mints and puts in the event; the event follows the media on the
+  same thread), so an image generated in the JVM is shown and synthesized speech can be played. The type is
+  the format's, or sniffed from the bytes. An audio input is read for the preview only when it can be read
+  again (a file, a byte array, a class path resource); a stream or a URL is left to the model and described
+  by name and size.
+- Beans of a routed provider are not wrapped: their calls are on the wire already. The inspector also drops a
+  bean's call when an HTTP round-trip of the same kind was recorded for the same call meanwhile.
+- Streamed speech and transcription (`stream`) pass through unobserved.
+
 ### 6. MCP client transports
 
 Only when Spring AI's MCP client is on the classpath:
@@ -533,8 +556,9 @@ Nothing else is needed when the app uses the usual Spring Boot beans:
 | the injected `ChatClient.Builder` | ChatClient calls, the advisor chain, model calls, memory, RAG setup |
 | Anthropic, TypeSafe, or OpenAI / Ollama / Mistral / DeepSeek at their default endpoints | HTTP wire traffic |
 | `@Tool` methods, tool callbacks, MCP tools | tool runs |
-| a `VectorStore` bean | adds and searches, with scored results |
+| a `VectorStore` bean | adds, deletes and searches, with scored results |
 | an `EmbeddingModel` bean | embedding calls |
+| an `ImageModel`, `TextToSpeechModel`, `TranscriptionModel` or `ModerationModel` bean | the calls, with the images, audio and transcripts, also for SDK-based and in-JVM models |
 | the auto-configured MCP client (`spring.ai.mcp.client.*.connections.*`) | MCP messages, and which server each tool comes from |
 
 ### 5. Cover what is built by hand

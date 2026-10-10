@@ -25,4 +25,17 @@ class BlobStoreTest {
 		assertThat(store.get(b)).isNull();
 	}
 
+	@Test
+	void keepsAnItemUnderTheClientsIdAndReplacesAnEarlierOne() {
+		BlobStore store = new BlobStore(100, 50);
+
+		assertThat(store.put("abcdef0123456789", new byte[10], "image/png")).isEqualTo("abcdef0123456789");
+		assertThat(store.put("abcdef0123456789", new byte[20], "image/jpeg")).isEqualTo("abcdef0123456789");
+
+		assertThat(store.get("abcdef0123456789").bytes()).hasSize(20);
+		assertThat(store.size()).isEqualTo(1);
+		assertThat(BlobStore.CLIENT_ID.matcher("abcdef0123456789").matches()).isTrue();
+		assertThat(BlobStore.CLIENT_ID.matcher("../etc").matches()).isFalse();
+	}
+
 }

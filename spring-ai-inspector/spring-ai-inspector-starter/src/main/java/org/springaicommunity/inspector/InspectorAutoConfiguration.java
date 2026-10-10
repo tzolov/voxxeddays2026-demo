@@ -203,6 +203,17 @@ public class InspectorAutoConfiguration {
 
 	}
 
+	/** Reports image, speech, transcription and moderation model calls of providers not on the wire. */
+	@Bean
+	static InspectorModelPostProcessor inspectorModelPostProcessor(ObjectProvider<InspectorClient> client,
+			Environment env) {
+		java.util.Set<String> routed = java.util.Arrays.stream(env.getProperty(InspectorEnvironmentPostProcessor.ROUTED, "").split(","))
+			.map(String::trim)
+			.filter(p -> !p.isEmpty())
+			.collect(java.util.stream.Collectors.toSet());
+		return new InspectorModelPostProcessor(client, routed);
+	}
+
 	/** Reports embedding calls, including those of models running in the JVM (no HTTP to record). */
 	@Bean
 	static InspectorEmbeddingModelPostProcessor inspectorEmbeddingModelPostProcessor(ObjectProvider<InspectorClient> client,
