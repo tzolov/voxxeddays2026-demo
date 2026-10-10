@@ -22,9 +22,12 @@ public class EventController {
 
 	private final BlobStore blobs;
 
-	public EventController(EventStore store, BlobStore blobs) {
+	private final RunImporter importer;
+
+	public EventController(EventStore store, BlobStore blobs, RunImporter importer) {
 		this.store = store;
 		this.blobs = blobs;
+		this.importer = importer;
 	}
 
 	/** Signature the starter looks for before routing an application's traffic here. */
@@ -52,13 +55,13 @@ public class EventController {
 
 	/**
 	 * Loads a run previously saved with the UI's Export button: the array of its events, in
-	 * the format of EVENTS.md. A recording in a newer format than this server reads is refused
-	 * with a 400 naming both versions.
+	 * the format of EVENTS.md, with the media it pointed at as {@code blob} events. A recording
+	 * in a newer format than this server reads is refused with a 400 naming both versions.
 	 */
 	@PostMapping("/import")
 	public Map<String, Object> importRun(@RequestBody List<Map<String, Object>> events,
 			@RequestParam(defaultValue = "upload") String name) {
-		return Map.of("runId", this.store.importRun(events, name), "events", events.size());
+		return Map.of("runId", this.importer.importRun(events, name), "events", events.size());
 	}
 
 	@ExceptionHandler(IllegalArgumentException.class)

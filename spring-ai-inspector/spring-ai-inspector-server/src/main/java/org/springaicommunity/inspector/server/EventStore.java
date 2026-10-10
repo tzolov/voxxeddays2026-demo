@@ -3,6 +3,7 @@ package org.springaicommunity.inspector.server;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import jakarta.annotation.PreDestroy;
@@ -36,6 +37,19 @@ public class EventStore {
 
 	private final EventLog log;
 
+	/** The media the events point at: an item goes when the last event naming it is dropped. */
+	private final BlobStore blobs;
+
+	/**
+	 * How many events in the log name each blob. The starter uploads a media item once and names
+	 * it from every view and turn that carries it, so a blob outlives the first of those events.
+	 */
+	private final Map<String, Integer> blobRefs = new java.util.HashMap<>();
+
+	/** Where an event names a blob: a marker in a body, or a {@code blobId} field, at any depth. */
+	private static final java.util.regex.Pattern BLOB_REF = java.util.regex.Pattern
+		.compile("blob:([a-f0-9]{8,32})>|\"blobId\":\"([a-f0-9]{8,32})\"");
+
 	private final Correlator correlator = new Correlator();
 
 	private final SseBroadcaster broadcaster = new SseBroadcaster();
@@ -44,8 +58,13 @@ public class EventStore {
 	private boolean importing;
 
 	@Autowired
-	public EventStore(InspectorProperties properties) {
+	public EventStore(InspectorProperties properties, BlobStore blobs) {
 		this.log = new EventLog(properties.maxTotalBytes());
+		this.blobs = blobs;
+	}
+
+	EventStore(InspectorProperties properties) {
+		this(properties, new BlobStore(properties));
 	}
 
 	EventStore() {
@@ -58,8 +77,57 @@ public class EventStore {
 			this.correlator.attribute(event);
 			this.correlator.track(event);
 		}
-		this.log.append(event);
+		for (String id : blobIdsOf(event)) {
+			this.blobRefs.merge(id, 1, Integer::sum);
+		}
+		for (Map<String, Object> dropped : this.log.append(event)) {
+			forgetBlobsOf(dropped);
+		}
 		this.broadcaster.broadcast(event);
+	}
+
+	/** The blobs a dropped event pointed at go once no event in the log names them: they'd only hold the budget. */
+	private void forgetBlobsOf(Map<String, Object> event) {
+		for (String id : blobIdsOf(event)) {
+			Integer left = this.blobRefs.merge(id, -1, Integer::sum);
+			if (left == null || left <= 0) {
+				this.blobRefs.remove(id);
+				this.blobs.remove(id);
+			}
+		}
+	}
+
+	/** The blobs an event names: in body markers and {@code blobId} fields, in nested maps and lists too. */
+	static Set<String> blobIdsOf(Object value) {
+		Set<String> ids = new java.util.LinkedHashSet<>();
+		collectBlobIds(value, ids);
+		return ids;
+	}
+
+	private static void collectBlobIds(Object value, Set<String> ids) {
+		if (value instanceof String s) {
+			if (s.contains("blob")) {
+				java.util.regex.Matcher m = BLOB_REF.matcher(s);
+				while (m.find()) {
+					ids.add(m.group(1) != null ? m.group(1) : m.group(2));
+				}
+			}
+		}
+		else if (value instanceof Map<?, ?> map) {
+			for (Map.Entry<?, ?> entry : map.entrySet()) {
+				if ("blobId".equals(entry.getKey()) && entry.getValue() instanceof String id && BlobStore.CLIENT_ID.matcher(id).matches()) {
+					ids.add(id);
+				}
+				else {
+					collectBlobIds(entry.getValue(), ids);
+				}
+			}
+		}
+		else if (value instanceof Iterable<?> list) {
+			for (Object item : list) {
+				collectBlobIds(item, ids);
+			}
+		}
 	}
 
 	/** A copy of the recorded events, oldest first. */
@@ -94,16 +162,13 @@ public class EventStore {
 	 * @throws IllegalArgumentException for a recording in a newer format than this server reads
 	 */
 	public synchronized String importRun(List<Map<String, Object>> events, String source) {
-		int newest = events.stream().mapToInt(EventStore::versionOf).max().orElse(0);
-		if (newest > EVENTS_VERSION) {
-			throw new IllegalArgumentException("recording in event format v" + newest + ", this inspector reads up to v"
-					+ EVENTS_VERSION + " (see EVENTS.md)");
-		}
+		requireReadable(events);
 		String runId = "imp-" + UUID.randomUUID().toString().substring(0, 6);
 		this.importing = true;
 		try {
 			for (Map<String, Object> original : events) {
-				if ("clear".equals(original.get("type"))) {
+				// Blob events carry a recording's media (see RunImporter), not something to show.
+				if ("clear".equals(original.get("type")) || "blob".equals(original.get("type"))) {
 					continue;
 				}
 				Map<String, Object> event = new LinkedHashMap<>(original);
@@ -121,6 +186,15 @@ public class EventStore {
 		return runId;
 	}
 
+	/** Refuses a recording in a newer format than this server reads, before anything of it is kept. */
+	static void requireReadable(List<Map<String, Object>> events) {
+		int newest = events.stream().mapToInt(EventStore::versionOf).max().orElse(0);
+		if (newest > EVENTS_VERSION) {
+			throw new IllegalArgumentException("recording in event format v" + newest + ", this inspector reads up to v"
+					+ EVENTS_VERSION + " (see EVENTS.md)");
+		}
+	}
+
 	/** The format version an event declares; 0 for one from before versioning. */
 	static int versionOf(Map<String, Object> event) {
 		return event.get("v") instanceof Number n ? n.intValue() : 0;
@@ -129,6 +203,7 @@ public class EventStore {
 	/** Forgets the events and the open calls (not the upstreams: a running app keeps being forwarded) and tells the browsers. */
 	public synchronized void clear() {
 		this.log.clear();
+		this.blobRefs.clear();
 		this.correlator.clear();
 		Map<String, Object> event = new LinkedHashMap<>();
 		event.put("type", "clear");

@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 
 import { state, touchUi } from '../../main/resources/static/js/state.js';
 import { EVENTS_VERSION, affectsSelected, handle, touch } from '../../main/resources/static/js/model.js';
+import { blobIdsOf, recordingOf } from '../../main/resources/static/js/io.js';
 import { ADAPTERS, adapterOf, anthropicBlock, blobMarker, mediaOf, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
@@ -804,6 +805,28 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	state.open.set(folded.match(/data-key="([^"]+)"/)[1], true);
 	assert.match(renderSpringMessage(m, 'added'), /^<details class="msg system added" data-key="sys:\w+" open>/);
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
+});
+
+test('a recording carries the media the inspector still holds, as blob events the UI itself ignores', async () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' });
+	handle({ type: 'wire-response', runId: 'r', ts: 2, wireId: 'w1', status: 200, body: '{"b64_json":"<base64 9 chars image/png blob:aaaaaaaaaaaaaaaa>"}' });
+	handle({ type: 'wire-response', runId: 'r', ts: 3, wireId: 'w2', status: 200, bodyKind: 'binary', blobId: 'bbbbbbbbbbbbbbbb', contentType: 'audio/mpeg', size: 3 });
+	handle({ type: 'client-request', runId: 'r', ts: 4, callId: 'c1', messages: [{ role: 'user', text: 'x', media: [{ type: 'image/png', size: 5, blobId: 'cccccccccccccccc' }] }] });
+	handle({ type: 'blob', runId: 'r', id: 'dddddddddddddddd', data: 'AAAA' }); // from an older export fed back: ignored
+	const run = state.runs.get('r');
+	assert.equal(run.events.length, 4);
+	assert.deepEqual(blobIdsOf(run.events).sort(), ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc']);
+	const recording = await recordingOf(run, async (id) => (id === 'bbbbbbbbbbbbbbbb' ? null : { contentType: 'image/png', bytes: new Uint8Array([1, 2, 3]).buffer }));
+	assert.equal(recording.length, 4 + 2); // the events without ord, then the two blobs still held
+	assert.ok(recording.slice(0, 4).every((e) => !('ord' in e)));
+	assert.deepEqual(recording[4], { v: EVENTS_VERSION, type: 'blob', runId: 'r', id: 'aaaaaaaaaaaaaaaa', contentType: 'image/png', size: 3, data: 'AQID' });
+});
+
+test('a media URL of unknown type is tried as an image, a typed non-image one is a link', () => {
+	assert.match(renderMedia({ url: 'https://cdn.example/signed?sig=abc' }), /<img class="media" src="https:\/\/cdn\.example\/signed\?sig=abc"/);
+	assert.match(renderMedia({ url: 'https://cdn.example/a.mp3' }), /^<a class="media-link"[^>]*>https:\/\/cdn\.example\/a\.mp3<\/a>$/);
+	assert.doesNotMatch(renderMedia({ url: 'https://cdn.example/doc.pdf', type: 'application/pdf' }), /<img/);
 });
 
 test('every event of a call marks it and the calls around it as changed, across a remote link too', () => {

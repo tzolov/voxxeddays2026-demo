@@ -49,8 +49,11 @@ export function renderMedia(media) {
 		return `<a class="tag" href="${esc(src)}" target="_blank" download>${esc(type || 'file')}${size}</a>`;
 	}
 	if (media.url) {
-		const img = /\.(png|jpe?g|gif|webp)(\?|$)/i.test(media.url) || (media.type || '').startsWith('image/');
-		return `<a class="media-link" href="${esc(media.url)}" target="_blank">${img ? `<img class="media" src="${esc(media.url)}" alt="" onerror="this.classList.add('gone')"><span class="media-gone tag muted">image not reachable</span>` : esc(oneLine(media.url, 80))}</a>`;
+		// An image by type or extension, or of unknown type (a provider's signed image URL has no extension):
+		// tried as one, with the link shown instead when it doesn't load.
+		const type = media.type || '';
+		const img = type.startsWith('image/') || (!type && !/\.(mp3|wav|ogg|flac|m4a|mp4|pdf|txt|json)(\?|$)/i.test(media.url));
+		return `<a class="media-link" href="${esc(media.url)}" target="_blank">${img ? `<img class="media" src="${esc(media.url)}" alt="" onerror="this.classList.add('gone')"><span class="media-gone tag muted">${esc(oneLine(media.url, 80))}</span>` : esc(oneLine(media.url, 80))}</a>`;
 	}
 	return `<span class="tag muted">${esc(media.type || 'base64')} · ${fmtNum(media.chars)} chars (not kept)</span>`;
 }

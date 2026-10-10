@@ -1,9 +1,39 @@
-import { apiHeaders } from './state.js';
+import { EVENTS_VERSION } from './model.js';
+import { apiHeaders, apiUrl } from './state.js';
 
 // ---------------------------------------------------------------- export / import
-export function exportRun(run) {
-	// Without the UI's own order key (see model.js): a recording holds what was received.
-	const blob = new Blob([JSON.stringify(run.events.map(({ ord, ...e }) => e), null, 1)], { type: 'application/json' });
+/** The blobs a run's events point at: markers in bodies, blobId fields (see EVENTS.md). */
+export function blobIdsOf(events) {
+	const ids = new Set();
+	for (const m of JSON.stringify(events).matchAll(/blob:([a-f0-9]{8,32})>|\\"blobId\\":\\"([a-f0-9]{8,32})\\"|"blobId":"([a-f0-9]{8,32})"/g)) ids.add(m[1] || m[2] || m[3]);
+	return [...ids];
+}
+
+/** A recording: the run's events as received, then the media the inspector still holds, as blob events. */
+export async function recordingOf(run, fetchBlob) {
+	const events = run.events.filter((e) => e.type !== 'blob').map(({ ord, ...e }) => e); // without the UI's own order key (see model.js)
+	for (const id of blobIdsOf(events)) {
+		const got = await fetchBlob(id).catch(() => null);
+		if (got) events.push({ v: EVENTS_VERSION, type: 'blob', runId: run.id, id, contentType: got.contentType, size: got.bytes.byteLength, data: base64(got.bytes) });
+	}
+	return events;
+}
+
+function base64(buffer) {
+	const bytes = new Uint8Array(buffer); let s = '';
+	for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+	return btoa(s);
+}
+
+async function fetchBlob(id) {
+	const res = await fetch(apiUrl('api/blobs/' + encodeURIComponent(id)), { headers: apiHeaders() });
+	if (!res.ok) return null; // gone from the inspector's budget: the marker is exported alone
+	return { contentType: res.headers.get('content-type') || '', bytes: await res.arrayBuffer() };
+}
+
+export async function exportRun(run) {
+	const events = await recordingOf(run, fetchBlob);
+	const blob = new Blob([JSON.stringify(events, null, 1)], { type: 'application/json' });
 	const a = document.createElement('a');
 	a.href = URL.createObjectURL(blob);
 	a.download = `${run.app.split(' · ')[0].replace(/[^\w.-]+/g, '_')}-${run.id}.json`;

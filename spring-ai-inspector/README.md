@@ -49,8 +49,9 @@ The media itself (inline base64 of a recognized type, binary bodies, uploaded fi
 events, in memory under `spring.ai.inspector.max-blob-bytes`, and served to the UI from `/api/blobs/<id>`; the
 events carry a `<base64 N chars TYPE blob:ID>` marker where the payload was. Long base64 that is not media (an
 embedding vector in base64, a signature) is cut to the marker only. Audio a chat model streams back in small
-deltas (`gpt-audio` with `stream`) is put together into one playable clip (raw PCM gets a WAV header). Blobs
-are not part of exports: an imported or replayed run shows the markers without previews.
+deltas (`gpt-audio` with `stream`) is put together into one playable clip (raw PCM gets a WAV header). An
+export carries the blobs the inspector still holds, so an imported run has its previews; a blob goes when the
+last event pointing at it has been dropped from the log.
 
 ## RAG and memory
 

@@ -141,8 +141,12 @@ then `linkedBy: "header"`; otherwise the calls open for the run), and the body:
 `durationMs`, `headers`, the body as above, `error` when the stream broke or the upstream was unreachable
 (then `status: 502`, no headers or body).
 
-Blobs (`/api/blobs/{id}`) are not part of a recording: an exported run keeps the markers and ids, and a
-preview is shown only while the inspector that recorded it still holds the bytes.
+Blobs (`/api/blobs/{id}`) live in memory under a budget and are dropped with the last event that points at
+them. An export appends the ones the inspector still holds as `blob` events, after the run's events:
+
+`blob` (UI, export only): `id`, `contentType`, `size`, `data` (base64). `/api/import` and the preloader put
+them back under the same ids and keep none of them as events; the UI ignores one that reaches it. A marker
+whose blob was gone at export time is shown without a preview.
 
 ## Versioning
 

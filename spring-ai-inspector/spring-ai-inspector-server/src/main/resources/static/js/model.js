@@ -8,6 +8,7 @@ export const EVENTS_VERSION = 1;
 
 // ---------------------------------------------------------------- event handling
 export function handle(ev) {
+	if (ev.type === 'blob') return; // a recording's media (see io.js): the server keeps it, it is nothing to show
 	if (ev.type === 'clear') {
 		if (replay) stopReplay();
 		state.runs.clear(); state.selected = null; state.open.clear(); state.tabs.clear();

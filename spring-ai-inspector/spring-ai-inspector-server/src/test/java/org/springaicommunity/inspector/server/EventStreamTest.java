@@ -42,6 +42,26 @@ class EventStreamTest {
 	}
 
 	@Test
+	void anImportedRecordingBringsItsMediaBack() throws Exception {
+		String png = java.util.Base64.getEncoder().encodeToString(new byte[] { (byte) 0x89, 'P', 'N', 'G', 1, 2, 3 });
+		String recording = "[{\"type\":\"run-start\",\"runId\":\"x\",\"app\":\"demo\"},"
+				+ "{\"type\":\"wire-response\",\"runId\":\"x\",\"wireId\":\"w1\",\"body\":\"{\\\"b64_json\\\":\\\"<base64 9 chars image/png blob:abcdef0123456789>\\\"}\"},"
+				+ "{\"type\":\"blob\",\"runId\":\"x\",\"id\":\"abcdef0123456789\",\"contentType\":\"image/png\",\"data\":\"" + png + "\"}]";
+		HttpClient http = HttpClient.newHttpClient();
+		HttpResponse<String> imported = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/import?name=r.json"))
+			.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(recording)).build(), HttpResponse.BodyHandlers.ofString());
+		assertThat(imported.statusCode()).isEqualTo(200);
+
+		HttpResponse<byte[]> blob = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/api/blobs/abcdef0123456789")).build(),
+				HttpResponse.BodyHandlers.ofByteArray());
+		assertThat(blob.statusCode()).isEqualTo(200);
+		assertThat(blob.headers().firstValue("content-type").orElse("")).startsWith("image/png");
+		assertThat(blob.body()).hasSize(7);
+		// The blob event itself is not kept as an event.
+		assertThat(this.store.events()).extracting(e -> e.get("type")).containsExactly("run-start", "wire-response");
+	}
+
+	@Test
 	void aRecordingInANewerFormatIsRefusedWithTheVersions() throws Exception {
 		HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
 				URI.create("http://localhost:" + this.port + "/api/import?name=future.json"))

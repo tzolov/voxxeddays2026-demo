@@ -71,6 +71,14 @@ public class BlobStore {
 		return this.blobs.get(id);
 	}
 
+	/** Forgets an item, e.g. once the event that pointed at it is gone from the log. */
+	public synchronized void remove(String id) {
+		Blob gone = this.blobs.remove(id);
+		if (gone != null) {
+			this.totalBytes -= gone.bytes().length;
+		}
+	}
+
 	public synchronized void clear() {
 		this.blobs.clear();
 		this.totalBytes = 0;

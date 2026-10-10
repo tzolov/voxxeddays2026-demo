@@ -173,6 +173,54 @@ class EventStoreTest {
 	}
 
 	@Test
+	void theBlobsOfADroppedEventGoWithIt() {
+		BlobStore blobs = new BlobStore(1_000_000, 100_000);
+		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L, 1L, 0L, 0), blobs);
+		String inBody = blobs.put(new byte[10], "image/png");
+		String inField = blobs.put(new byte[10], "audio/wav");
+		String later = blobs.put(new byte[10], "image/png");
+		add(small, "wire-response", "r1", "body", "{\"data\":\"<base64 5000 chars image/png blob:" + inBody + ">\"}" + "x".repeat(3000));
+		add(small, "wire-response", "r1", "bodyKind", "binary", "blobId", inField, "body", "x".repeat(3000));
+		for (int i = 0; i < 10; i++) {
+			add(small, "wire-response", "r1", "body", "x".repeat(3000)); // pushes the first two out
+		}
+		add(small, "wire-response", "r1", "body", "<base64 9 chars image/png blob:" + later + ">");
+
+		assertThat(blobs.get(inBody)).isNull();
+		assertThat(blobs.get(inField)).isNull();
+		assertThat(blobs.get(later)).isNotNull(); // its event is still in the log
+	}
+
+	@Test
+	void aBlobNamedBySeveralEventsStaysUntilTheLastOfThemIsDropped() {
+		BlobStore blobs = new BlobStore(1_000_000, 100_000);
+		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L, 1L, 0L, 0), blobs);
+		String shared = blobs.put(new byte[10], "image/png");
+		// The starter uploads an image once and names it in the CLIENT and the MODEL request, nested in the messages.
+		// Each event is ~3.5 KB of the 10 KB budget: two fit, a third pushes the oldest out.
+		Map<String, Object> media = Map.of("type", "image/png", "size", 10, "blobId", shared);
+		add(small, "client-request", "r1", "messages", List.of(Map.of("role", "user", "media", List.of(media))), "pad", "x".repeat(1500));
+		add(small, "model-request", "r1", "messages", List.of(Map.of("role", "user", "media", List.of(media))), "pad", "x".repeat(1500));
+		add(small, "wire-response", "r1", "body", "x".repeat(1500)); // the client-request goes: the model-request still names the blob
+		assertThat(small.events()).extracting(e -> e.get("type")).containsExactly("model-request", "wire-response");
+		assertThat(blobs.get(shared)).isNotNull();
+
+		add(small, "wire-response", "r1", "body", "x".repeat(1500)); // now the model-request goes too
+		assertThat(small.events()).extracting(e -> e.get("type")).containsExactly("wire-response", "wire-response");
+		assertThat(blobs.get(shared)).isNull();
+	}
+
+	private static void add(EventStore store, String type, String runId, Object... keyValues) {
+		Map<String, Object> event = new HashMap<>();
+		event.put("type", type);
+		event.put("runId", runId);
+		for (int i = 0; i < keyValues.length; i += 2) {
+			event.put((String) keyValues[i], keyValues[i + 1]);
+		}
+		store.add(event);
+	}
+
+	@Test
 	void dropsTheOldestEventsBeyondTheByteBudget() {
 		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L, 1L, 0L, 0));
 		for (int i = 0; i < 20; i++) {

@@ -34,15 +34,22 @@ final class EventLog {
 		this.maxTotalBytes = maxTotalBytes;
 	}
 
-	/** Appends the event, numbering it, and drops the oldest ones beyond the budget. */
-	void append(Map<String, Object> event) {
+	/** Appends the event, numbering it, and drops the oldest ones beyond the budget, which are returned. */
+	List<Map<String, Object>> append(Map<String, Object> event) {
 		event.put("seq", ++this.seq);
 		int size = sizeOf(event);
 		this.events.addLast(new Stored(event, size));
 		this.totalBytes += size;
+		List<Map<String, Object>> evicted = List.of();
 		while (this.events.size() > MAX_EVENTS || (this.totalBytes > this.maxTotalBytes && this.events.size() > 1)) {
-			this.totalBytes -= this.events.pollFirst().size();
+			Stored oldest = this.events.pollFirst();
+			this.totalBytes -= oldest.size();
+			if (evicted.isEmpty()) {
+				evicted = new ArrayList<>();
+			}
+			evicted.add(oldest.event());
 		}
+		return evicted;
 	}
 
 	/** Roughly what an event costs in memory: its text fields (bodies, results) plus overhead. */

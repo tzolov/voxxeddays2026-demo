@@ -362,53 +362,67 @@ final class WireCapture {
 	 * reads the request like any other.
 	 */
 	private void multipart(Map<String, Object> event, byte[] bytes, String boundary) {
-		String raw = new String(bytes, StandardCharsets.ISO_8859_1); // one char per byte
+		// Scanned in place: no copy of the body, one of each file part (the blob).
 		Map<String, Object> fields = new LinkedHashMap<>();
 		List<Map<String, Object>> files = new ArrayList<>();
-		String delimiter = "--" + boundary;
-		int at = raw.indexOf(delimiter);
+		byte[] delimiter = ("--" + boundary).getBytes(StandardCharsets.ISO_8859_1);
+		byte[] next = ("\r\n--" + boundary).getBytes(StandardCharsets.ISO_8859_1);
+		byte[] headersEnd = "\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1);
+		int at = indexOf(bytes, delimiter, 0);
 		while (at >= 0) {
-			int start = at + delimiter.length();
-			if (raw.startsWith("--", start)) {
+			int start = at + delimiter.length;
+			if (start + 1 < bytes.length && bytes[start] == '-' && bytes[start + 1] == '-') {
 				break; // the closing delimiter
 			}
-			int next = raw.indexOf("\r\n" + delimiter, start);
-			if (next < 0) {
+			int partEnd = indexOf(bytes, next, start);
+			if (partEnd < 0) {
 				break;
 			}
-			String part = raw.substring(start, next);
-			int headersEnd = part.indexOf("\r\n\r\n");
-			if (headersEnd >= 0) {
-				String headers = part.substring(0, headersEnd);
-				String content = part.substring(headersEnd + 4);
+			int blank = indexOf(bytes, headersEnd, start);
+			if (blank >= 0 && blank < partEnd) {
+				String headers = new String(bytes, start, blank - start, StandardCharsets.ISO_8859_1);
+				int contentStart = blank + headersEnd.length;
 				String name = headerParam(headers, "name");
 				String filename = headerParam(headers, "filename");
 				if (name != null && filename == null) {
-					String value = new String(content.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+					String value = new String(bytes, contentStart, partEnd - contentStart, StandardCharsets.UTF_8);
 					fields.put(name, value.length() <= MAX_FIELD ? value : value.substring(0, MAX_FIELD) + "…");
 				}
 				else if (name != null) {
-					byte[] file = content.getBytes(StandardCharsets.ISO_8859_1);
-					String type = headerValue(headers, "content-type");
+					byte[] file = java.util.Arrays.copyOfRange(bytes, contentStart, partEnd);
+					String type = mediaType(headerValue(headers, "content-type"), file);
 					Map<String, Object> f = new LinkedHashMap<>();
 					f.put("name", name);
 					f.put("filename", filename);
-					f.put("contentType", mediaType(type, file));
+					f.put("contentType", type);
 					f.put("size", file.length);
-					String blobId = keep(file, mediaType(type, file));
+					String blobId = keep(file, type);
 					if (blobId != null) {
 						f.put("blobId", blobId);
 					}
 					files.add(f);
 				}
 			}
-			at = next + 2;
+			at = partEnd + 2;
 		}
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("fields", fields);
 		body.put("files", files);
 		event.put("bodyKind", "multipart");
 		event.put("body", toJson(body));
+	}
+
+	/** The first index of {@code needle} in {@code hay} at or after {@code from}, or -1. */
+	static int indexOf(byte[] hay, byte[] needle, int from) {
+		outer: for (int i = Math.max(0, from); i <= hay.length - needle.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (hay[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
 	}
 
 	private static @Nullable String headerParam(String headers, String param) {

@@ -24,12 +24,12 @@ public class RunPreloader implements ApplicationRunner {
 
 	private static final Log logger = LogFactory.getLog(RunPreloader.class);
 
-	private final EventStore store;
+	private final RunImporter importer;
 
 	private final InspectorProperties properties;
 
-	public RunPreloader(EventStore store, InspectorProperties properties) {
-		this.store = store;
+	public RunPreloader(RunImporter importer, InspectorProperties properties) {
+		this.importer = importer;
 		this.properties = properties;
 	}
 
@@ -49,7 +49,7 @@ public class RunPreloader implements ApplicationRunner {
 				try {
 					List<Map<String, Object>> events = json.readValue(file.toFile(), new TypeReference<>() {
 					});
-					this.store.importRun(events, file.getFileName().toString());
+					this.importer.importRun(events, file.getFileName().toString());
 					logger.info("Preloaded " + events.size() + " events from " + file.getFileName());
 				}
 				catch (Exception ex) {
