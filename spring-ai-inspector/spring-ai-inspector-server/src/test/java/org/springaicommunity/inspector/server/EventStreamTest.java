@@ -42,6 +42,19 @@ class EventStreamTest {
 	}
 
 	@Test
+	void aRecordingInANewerFormatIsRefusedWithTheVersions() throws Exception {
+		HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+				URI.create("http://localhost:" + this.port + "/api/import?name=future.json"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString("[{\"v\":" + (EventStore.EVENTS_VERSION + 1) + ",\"type\":\"run-start\",\"runId\":\"x\"}]"))
+			.build(), HttpResponse.BodyHandlers.ofString());
+
+		assertThat(response.statusCode()).isEqualTo(400);
+		assertThat(response.body()).contains("\"error\"").contains("v" + (EventStore.EVENTS_VERSION + 1));
+		assertThat(this.store.events()).isEmpty();
+	}
+
+	@Test
 	void aNewTabGetsTheHistoryThenTheLiveEventsWithoutDuplicates() throws Exception {
 		for (int i = 0; i < 300; i++) {
 			add("history-" + i);

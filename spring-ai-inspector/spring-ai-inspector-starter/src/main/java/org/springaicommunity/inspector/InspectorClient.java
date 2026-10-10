@@ -296,12 +296,20 @@ public class InspectorClient {
 		return build(type, payload, System.currentTimeMillis());
 	}
 
+	/**
+	 * The version of the event format this starter emits, carried as {@code v} on every event
+	 * (see EVENTS.md in the inspector module). Bumped together with the server's and the UI's
+	 * when a field changes meaning or goes away; readers accept older events and refuse newer.
+	 */
+	public static final int EVENTS_VERSION = 1;
+
 	private String build(String type, Supplier<Map<String, Object>> payload, long ts) {
 		if (System.currentTimeMillis() < this.pausedUntil) {
 			return null;
 		}
 		try {
 			Map<String, Object> event = new LinkedHashMap<>();
+			event.put("v", EVENTS_VERSION);
 			event.put("type", type);
 			event.put("runId", this.runId);
 			event.put("ts", ts);

@@ -94,6 +94,22 @@ class EventStoreTest {
 	}
 
 	@Test
+	void importsRecordingsOfThisFormatAndOlderOnesButRefusesNewerOnes() {
+		this.store.importRun(List.of(Map.of("type", "run-start", "runId", "old")), "before-versioning.json");
+		this.store.importRun(List.of(Map.of("v", EventStore.EVENTS_VERSION, "type", "run-start", "runId", "now")), "current.json");
+		assertThat(this.store.events()).hasSize(2);
+
+		List<Map<String, Object>> newer = List.of(Map.of("v", EventStore.EVENTS_VERSION, "type", "run-start", "runId", "x"),
+				Map.of("v", EventStore.EVENTS_VERSION + 1, "type", "client-request", "runId", "x"));
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> this.store.importRun(newer, "future.json"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("v" + (EventStore.EVENTS_VERSION + 1))
+			.hasMessageContaining("v" + EventStore.EVENTS_VERSION);
+		assertThat(this.store.events()).hasSize(2); // nothing of the refused recording was kept
+		assertThat(EventStore.EVENTS_VERSION).isEqualTo(1); // bump EVENTS.md and the starter/UI constants with it
+	}
+
+	@Test
 	void importedEventsKeepTheirOwnLinks() {
 		add("client-request", "caller", "callId", "c1");
 		add("tool-start", "caller", "toolId", "task", "clientCallId", "c1");

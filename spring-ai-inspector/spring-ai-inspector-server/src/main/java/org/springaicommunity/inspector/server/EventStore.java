@@ -46,6 +46,13 @@ public class EventStore {
 
 	private static final int MAX_EVENTS = 20_000;
 
+	/**
+	 * The event format this server writes (wire events) and reads (imports, preloads), see
+	 * EVENTS.md. Events without {@code v} are from before versioning and are read as they are;
+	 * a recording with a higher version is refused rather than shown wrong.
+	 */
+	public static final int EVENTS_VERSION = 1;
+
 	/** Bytes a stored event costs beyond its text fields: the map, the small values. */
 	private static final int EVENT_OVERHEAD = 512;
 
@@ -255,6 +262,11 @@ public class EventStore {
 	 * @return the new run id
 	 */
 	public synchronized String importRun(List<Map<String, Object>> events, String source) {
+		int newest = events.stream().mapToInt(EventStore::versionOf).max().orElse(0);
+		if (newest > EVENTS_VERSION) {
+			throw new IllegalArgumentException("recording in event format v" + newest + ", this inspector reads up to v"
+					+ EVENTS_VERSION + " (see EVENTS.md)");
+		}
 		String runId = "imp-" + UUID.randomUUID().toString().substring(0, 6);
 		this.importing = true;
 		try {
@@ -279,6 +291,11 @@ public class EventStore {
 			}
 			add(event);
 		}
+	}
+
+	/** The format version an event declares; 0 for one from before versioning. */
+	static int versionOf(Map<String, Object> event) {
+		return event.get("v") instanceof Number n ? n.intValue() : 0;
 	}
 
 	public synchronized void clear() {

@@ -3,7 +3,9 @@ package org.springaicommunity.inspector.server;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -35,7 +37,7 @@ public class EventController {
 	 */
 	@GetMapping("/ping")
 	public Map<String, Object> ping() {
-		return Map.of("name", SIGNATURE, "api", 1);
+		return Map.of("name", SIGNATURE, "api", 1, "events", EventStore.EVENTS_VERSION);
 	}
 
 	@PostMapping("/events")
@@ -48,11 +50,20 @@ public class EventController {
 		return this.store.subscribe();
 	}
 
-	/** Loads a run previously saved with the UI's Export button. */
+	/**
+	 * Loads a run previously saved with the UI's Export button: the array of its events, in
+	 * the format of EVENTS.md. A recording in a newer format than this server reads is refused
+	 * with a 400 naming both versions.
+	 */
 	@PostMapping("/import")
 	public Map<String, Object> importRun(@RequestBody List<Map<String, Object>> events,
 			@RequestParam(defaultValue = "upload") String name) {
 		return Map.of("runId", this.store.importRun(events, name), "events", events.size());
+	}
+
+	@ExceptionHandler(IllegalArgumentException.class)
+	public ResponseEntity<Map<String, Object>> rejected(IllegalArgumentException ex) {
+		return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(ex.getMessage())));
 	}
 
 	@DeleteMapping("/events")

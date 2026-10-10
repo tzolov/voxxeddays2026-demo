@@ -27,6 +27,20 @@ class InspectorClientTest {
 	}
 
 	@Test
+	void everyEventCarriesTheFormatVersionAndTheEnvelope() {
+		List<String> sent = new ArrayList<>();
+		new InspectorClient("run-1", sent::add).send("x", () -> Map.of("k", "v"));
+
+		Map<String, Object> event = new org.springframework.ai.util.JsonHelper().fromJsonToMap(sent.get(0));
+		assertThat(event).containsEntry("v", InspectorClient.EVENTS_VERSION)
+			.containsEntry("type", "x")
+			.containsEntry("runId", "run-1")
+			.containsEntry("k", "v")
+			.containsKey("ts");
+		assertThat(InspectorClient.EVENTS_VERSION).isEqualTo(1); // bump EVENTS.md and the server/UI constants with it
+	}
+
+	@Test
 	void theRunIsAnnouncedAgainAfterTheInspectorWasUnreachable() throws Exception {
 		List<String> sent = new ArrayList<>();
 		AtomicInteger posts = new AtomicInteger();

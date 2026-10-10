@@ -98,6 +98,10 @@ a run again as a new run, without calling any model: step by step (<kbd>→</kbd
 the original pace (<kbd>p</kbd> pauses, <kbd>Esc</kbd> stops). If the network fails during a talk, replay
 the runs you recorded beforehand.
 
+An exported run is the array of its events; [EVENTS.md](EVENTS.md) lists every event type with its fields and
+who emits it. Each event carries the format version (`v`); a recording from a newer inspector is refused on
+import rather than shown wrong, older ones are read as they are.
+
 To have recordings available right after startup, put the exported files in a folder:
 
 ```bash
@@ -242,7 +246,7 @@ spring-ai-inspector-server/src/main/resources/static/
     └── render/          cards, wire, messages, rag, memory, sequence, page
 ```
 
-Every module except `main.js` can be imported without a browser. Recorded demo runs in `src/test/js/fixtures`
+The events the modules consume are documented in [EVENTS.md](EVENTS.md). Every module except `main.js` can be imported without a browser. Recorded demo runs in `src/test/js/fixtures`
 drive the real model and render code in Node tests:
 
 ```bash

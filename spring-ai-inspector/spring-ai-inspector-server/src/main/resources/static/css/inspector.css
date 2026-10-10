@@ -139,6 +139,7 @@ select.btn { padding-right: .4rem; }
 .run-head h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.02em; }
 .stats { display: flex; flex-wrap: wrap; gap: .4rem; }
 .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: .1rem .6rem; font-size: .8rem; color: var(--muted); }
+.stat.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 .stat b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* ---------- call card ---------- */

@@ -494,7 +494,10 @@ compile-time dependencies on the libraries that define them. Every failure is sw
 
 ### 8. Event delivery
 
-`InspectorClient` posts JSON events to `<url>/api/events`. Each event carries `type`, `runId` and `ts`.
+Every event is a JSON object with `v` (the event format version), `type`, `runId` and `ts`, plus the fields of
+its type; the whole contract is in [EVENTS.md](../EVENTS.md).
+
+`InspectorClient` posts JSON events to `<url>/api/events`.
 
 | Method | Builds the event on | Posts on | Used for |
 |---|---|---|---|

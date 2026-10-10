@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { state } from '../../main/resources/static/js/state.js';
-import { handle } from '../../main/resources/static/js/model.js';
+import { EVENTS_VERSION, handle } from '../../main/resources/static/js/model.js';
 import { ADAPTERS, adapterOf, anthropicBlock, blobMarker, mediaOf, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
@@ -804,6 +804,17 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	state.open.set(folded.match(/data-key="([^"]+)"/)[1], true);
 	assert.match(renderSpringMessage(m, 'added'), /^<details class="msg system added" data-key="sys:\w+" open>/);
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
+});
+
+test('events in a newer format are kept and the run says so; older ones are read as they are', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'r', ts: 1, app: 'app' }); // before versioning: no v
+	handle({ v: EVENTS_VERSION, type: 'client-request', runId: 'r', ts: 2, callId: 'c1', messages: [] });
+	assert.equal(state.runs.get('r').newerFormat, undefined);
+	handle({ v: EVENTS_VERSION + 1, type: 'client-response', runId: 'r', ts: 3, callId: 'c1', generations: [] });
+	assert.equal(state.runs.get('r').newerFormat, EVENTS_VERSION + 1);
+	assert.equal(state.runs.get('r').calls.get('c1').resp.callId, 'c1'); // still handled
+	assert.equal(EVENTS_VERSION, 1); // bump EVENTS.md and the starter/server constants with it
 });
 
 test('message media the starter uploaded is shown; older recordings name the type only', () => {

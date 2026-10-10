@@ -16,8 +16,10 @@ export async function importFiles(files) {
 			const events = JSON.parse(await file.text());
 			if (!Array.isArray(events)) throw new Error('not an exported run');
 			// Imported on the server so the run survives page reloads; it arrives over the stream.
-			await fetch('api/import?name=' + encodeURIComponent(file.name), {
+			const res = await fetch('api/import?name=' + encodeURIComponent(file.name), {
 				method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(events) });
+			// A recording in a newer event format than the server reads is refused with the versions.
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
 		}
 		catch (e) { alert(`Could not import ${file.name}: ${e.message}`); }
 	}

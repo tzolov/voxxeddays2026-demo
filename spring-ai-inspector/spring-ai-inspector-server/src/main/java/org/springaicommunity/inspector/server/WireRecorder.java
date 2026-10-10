@@ -51,6 +51,7 @@ public class WireRecorder {
 		headers.forEach((name, values) -> shownHeaders.put(name, WireCapture.redactHeader(name, String.join(", ", values))));
 
 		Map<String, Object> event = new LinkedHashMap<>();
+		event.put("v", EventStore.EVENTS_VERSION);
 		event.put("type", "wire-request");
 		event.put("runId", runId);
 		event.put("wireId", wireId);
@@ -78,6 +79,7 @@ public class WireRecorder {
 	public void response(String runId, String wireId, int status, Map<String, List<String>> headers, byte[] body,
 			long durationMs, @Nullable String error) {
 		Map<String, Object> event = new LinkedHashMap<>();
+		event.put("v", EventStore.EVENTS_VERSION);
 		event.put("type", "wire-response");
 		event.put("runId", runId);
 		event.put("wireId", wireId);
@@ -96,6 +98,7 @@ public class WireRecorder {
 	/** Records that the upstream could not be reached: the round-trip is closed as a 502. */
 	public void failure(String runId, String wireId, Exception ex, long durationMs) {
 		Map<String, Object> event = new LinkedHashMap<>();
+		event.put("v", EventStore.EVENTS_VERSION);
 		event.put("type", "wire-response");
 		event.put("runId", runId);
 		event.put("wireId", wireId);

@@ -1,3 +1,4 @@
+import { EVENTS_VERSION } from '../model.js';
 import { usageOf } from '../providers.js';
 import { renderItems } from './cards.js';
 import { renderSequence } from './sequence.js';
@@ -58,6 +59,7 @@ export function renderMain() {
 	const head = `<div class="run-head"><h1>${esc(run.app)}</h1><div class="stats">
 		${run.replayOf ? '<span class="stat">replay</span>' : run.imported ? `<span class="stat" title="${esc(run.imported)}">imported</span>` : ''}
 		<span class="stat">${run.ended ? 'finished' : '<span class="spinner"></span> running'}</span>
+		${run.newerFormat ? `<span class="stat warn" title="Recorded by a newer starter or inspector; what this UI doesn't know is not shown">event format v${esc(String(run.newerFormat))}, this UI reads v${EVENTS_VERSION}</span>` : ''}
 		${run.model ? `<span class="stat">configured <b>${esc(run.model)}</b></span>` : ''}
 		<span class="stat"><b>${run.calls.size}</b> ChatClient calls</span>
 		<span class="stat"><b>${t.trips}</b> model round-trips</span>

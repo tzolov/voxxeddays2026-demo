@@ -3,6 +3,9 @@ import { adapterOf } from './providers.js';
 import { ensureRun, state } from './state.js';
 import { recordedTs } from './util.js';
 
+/** The event format this UI reads (EVENTS.md); an event with a higher `v` is from a newer starter or server. */
+export const EVENTS_VERSION = 1;
+
 // ---------------------------------------------------------------- event handling
 export function handle(ev) {
 	if (ev.type === 'clear') {
@@ -12,6 +15,8 @@ export function handle(ev) {
 	}
 	const run = ensureRun(ev.runId || 'unattributed', ev.ts);
 	run.events.push(ev);
+	// Shown as best as this UI can: fields it doesn't know are ignored, the header says so.
+	if ((ev.v || 0) > EVENTS_VERSION) run.newerFormat = Math.max(run.newerFormat || 0, ev.v);
 	switch (ev.type) {
 		case 'run-start':
 			run.app = ev.app || run.app; run.model = ev.model; run.pid = ev.pid;
