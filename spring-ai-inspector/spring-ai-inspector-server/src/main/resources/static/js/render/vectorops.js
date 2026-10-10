@@ -1,5 +1,6 @@
 import { adapterOf } from '../providers.js';
 import { recordedTs } from '../util.js';
+import { ORD_STEP } from '../model.js';
 
 // ---------------------------------------------------------------- what ran inside what
 // The tool running when something happened, the tool that started a sub-agent, and the vector
@@ -12,12 +13,12 @@ export const isEmbeddingWire = (it) => it.kind === 'wire' && adapterOf(it.ref)?.
 export const opKey = (ev) => 'vop:' + (ev.opId ?? ev.searchId ?? `${ev.store}:${ev.seq}`);
 
 /**
- * The tool running at {@code seq}, or undefined. By timing: with tools running in parallel, the
- * first one open. A tool whose end was never recorded (e.g. a dropped event) runs until its
- * call ended ({@code callEnd}), not on forever.
+ * The tool running at {@code at} (an order key, see model.js), or undefined. By timing: with tools
+ * running in parallel, the first one open. A tool whose end was never recorded (e.g. a dropped
+ * event) runs until its call ended ({@code callEnd}), not on forever.
  */
-export function toolAt(tools, seq, callEnd = Infinity) {
-	return tools.find((t) => t.start.seq < seq && seq < (t.end ? t.end.seq : callEnd));
+export function toolAt(tools, at, callEnd = Infinity) {
+	return tools.find((t) => t.start.ord < at && at < (t.end ? t.end.ord : callEnd));
 }
 
 /**
@@ -27,12 +28,12 @@ export function toolAt(tools, seq, callEnd = Infinity) {
  */
 export function toolOfCall(tools, call, callEnd = Infinity) {
 	const id = call.req.parentToolId;
-	return (id && tools.find((t) => t.id === id)) || toolAt(tools, call.req.seq, callEnd);
+	return (id && tools.find((t) => t.id === id)) || toolAt(tools, call.req.ord, callEnd);
 }
 
 /**
  * The vector store operations among `items` (adds) and `searches`, each with the embedding
- * round-trips made while it ran, and the seq it starts at. An operation reported when it
+ * round-trips made while it ran, and the order key it starts at. An operation reported when it
  * started is open until it ended; one of an older recording, reported only once done, spans
  * its duration before that.
  */
@@ -52,8 +53,8 @@ export function vectorOps(items, searches = []) {
 		}
 	}
 	for (const op of ops) {
-		const first = Math.min(...op.wires.map((w) => w.req.seq));
-		op.seq = op.ev.start ? op.ev.start.seq : (Number.isFinite(first) ? first : op.ev.seq) - 0.5;
+		const first = Math.min(...op.wires.map((w) => w.req.ord));
+		op.ord = op.ev.start ? op.ev.start.ord : (Number.isFinite(first) ? first : op.ev.ord) - ORD_STEP / 2;
 	}
 	return { ops, opOf: (wire) => byWire.get(wire) };
 }

@@ -165,7 +165,7 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			return;
 		}
 		// Built here, so the media is handed to the background thread first; posted from there.
-		c.sendAsync("model-call", () -> {
+		c.send("model-call", () -> {
 			Map<String, Object> event = new LinkedHashMap<>();
 			event.put("modelCallId", UUID.randomUUID().toString().substring(0, 8));
 			event.put("clientCallId", clientCallId);

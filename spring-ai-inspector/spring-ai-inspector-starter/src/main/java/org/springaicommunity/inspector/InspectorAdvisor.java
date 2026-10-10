@@ -125,7 +125,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 			InspectorCorrelation.Parent parent = InspectorCorrelation.parentOf(observation);
 			InspectorCorrelation.tag(own(observation), CALL_ID, callId);
 			this.client.send("client-request", () -> clientRequestEvent(callId, parent, clientRequest, chain.getCallAdvisors()));
-			sendMemorySnapshot(callId, "before", chain.getCallAdvisors(), request.context(), false);
+			sendMemorySnapshot(callId, "before", chain.getCallAdvisors(), request.context());
 		}
 		else {
 			ChatClientRequest modelRequest = request;
@@ -138,7 +138,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 		try {
 			ChatClientResponse response = chain.nextCall(request);
 			if (this.phase == Phase.CLIENT) {
-				sendMemorySnapshot(callId, "after", chain.getCallAdvisors(), request.context(), false);
+				sendMemorySnapshot(callId, "after", chain.getCallAdvisors(), request.context());
 			}
 			long durationMs = System.currentTimeMillis() - start;
 			ChatClientRequest sent = request;
@@ -166,7 +166,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 				InspectorCorrelation.tag(own(observation), CALL_ID, callId);
 				this.client.send("client-request",
 						() -> clientRequestEvent(callId, parent, streamRequest, chain.getStreamAdvisors()));
-				sendMemorySnapshot(callId, "before", chain.getStreamAdvisors(), streamRequest.context(), false);
+				sendMemorySnapshot(callId, "before", chain.getStreamAdvisors(), streamRequest.context());
 			}
 			else {
 				InspectorCorrelation.tag(own(observation), InspectorCorrelation.MODEL_CALL_ID, callId);
@@ -174,15 +174,14 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 						() -> requestEvent(callId, (String) streamRequest.context().get(CALL_ID), streamRequest, null));
 			}
 			long start = System.currentTimeMillis();
-			// The completion and error callbacks may run on Reactor threads: post without blocking.
 			return new ChatClientMessageAggregator()
 				.aggregateChatClientResponse(chain.nextStream(streamRequest), response -> {
 					if (this.phase == Phase.CLIENT) {
-						sendMemorySnapshot(callId, "after", chain.getStreamAdvisors(), streamRequest.context(), true);
+						sendMemorySnapshot(callId, "after", chain.getStreamAdvisors(), streamRequest.context());
 					}
-					this.client.sendAsync(responseType(), () -> responseEvent(callId, streamRequest, response, System.currentTimeMillis() - start));
+					this.client.send(responseType(), () -> responseEvent(callId, streamRequest, response, System.currentTimeMillis() - start));
 				})
-				.doOnError(ex -> this.client.sendAsync(responseType(), () -> errorEvent(callId,
+				.doOnError(ex -> this.client.send(responseType(), () -> errorEvent(callId,
 						ex instanceof RuntimeException rex ? rex : new RuntimeException(ex), System.currentTimeMillis() - start)));
 		});
 	}
@@ -206,7 +205,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 	 * snapshot itself is still read here), for callbacks on Reactor threads.
 	 */
 	private void sendMemorySnapshot(String callId, String phase, List<? extends Advisor> advisors,
-			Map<String, Object> context, boolean async) {
+			Map<String, Object> context) {
 		if (this.memoryReader == null) {
 			return;
 		}
@@ -217,12 +216,7 @@ public class InspectorAdvisor implements CallAdvisor, StreamAdvisor {
 				event.put("clientCallId", callId);
 				event.put("phase", phase);
 				event.put("stores", stores);
-				if (async) {
-					this.client.sendAsync("memory-snapshot", () -> event);
-				}
-				else {
-					this.client.send("memory-snapshot", () -> event);
-				}
+				this.client.send("memory-snapshot", () -> event);
 			}
 		}
 		catch (RuntimeException | LinkageError ex) {

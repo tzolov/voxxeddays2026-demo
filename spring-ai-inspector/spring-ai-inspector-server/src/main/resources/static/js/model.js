@@ -15,6 +15,7 @@ export function handle(ev) {
 	}
 	const run = ensureRun(ev.runId || 'unattributed', ev.ts);
 	run.events.push(ev);
+	ev.ord = orderKey(run, ev);
 	// Shown as best as this UI can: fields it doesn't know are ignored, the header says so.
 	if ((ev.v || 0) > EVENTS_VERSION) run.newerFormat = Math.max(run.newerFormat || 0, ev.v);
 	switch (ev.type) {
@@ -153,10 +154,28 @@ export function handle(ev) {
 		}
 		case 'memory-snapshot': {
 			const call = run.calls.get(ev.clientCallId);
-			if (call) { call.memory[ev.phase] = ev.stores; call.memory[ev.phase + 'Seq'] = ev.seq; }
+			if (call) { call.memory[ev.phase] = ev.stores; call.memory[ev.phase + 'Ord'] = ev.ord; }
 			break;
 		}
 	}
+}
+
+/**
+ * Where an event goes in the order of things: by the time it was recorded (the starter's clock for
+ * its events, the proxy's for wire events: the same machine as a rule), then by arrival within the
+ * same millisecond. Not by the server's `seq`: the starter posts in the background, so its events
+ * can reach the server a moment after the wire request they led to. An event without a time follows
+ * the one before it. The key is an exact integer (milliseconds since 2020, 64 events a millisecond,
+ * 16 sub-slots so a step can be placed just before or after an event: ORD_STEP).
+ */
+export const ORD_STEP = 16;
+const ORD_EPOCH = Date.UTC(2020, 0, 1);
+function orderKey(run, ev) {
+	const at = recordedTs(ev) ?? run.lastAt ?? ORD_EPOCH;
+	run.lastAt = at;
+	const n = (run.atCounts ||= new Map()).get(at) || 0;
+	run.atCounts.set(at, n + 1);
+	return ((at - ORD_EPOCH) * 64 + Math.min(n, 63)) * ORD_STEP;
 }
 
 /**
@@ -212,10 +231,10 @@ function inProcessModelCall(run, ev) {
 	const start = recordedTs(ev) - (ev.durationMs || 0);
 	const wire = { id: 'mc:' + ev.modelCallId, inProcess: true, inProcessLabel: `${ev.modelType || 'Model'} call · no HTTP`,
 		num: run.wireList.length + 1, prev: run.wireList[run.wireList.length - 1] || null,
-		req: { provider: ev.provider, method: '', path: PATH_OF_KIND[ev.kind] || '/' + ev.kind, url: '', headers: {}, seq: ev.seq - 0.5,
+		req: { provider: ev.provider, method: '', path: PATH_OF_KIND[ev.kind] || '/' + ev.kind, url: '', headers: {}, seq: ev.seq - 0.5, ord: ev.ord - ORD_STEP / 2,
 			ts: ev.ts - (ev.durationMs || 0), ...(replayed ? { recordedTs: start } : {}), clientCallId: ev.clientCallId,
 			body: JSON.stringify(ev.request ?? {}) },
-		resp: { seq: ev.seq, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
+		resp: { seq: ev.seq, ord: ev.ord, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
 			durationMs: ev.durationMs, headers: {}, body: JSON.stringify(ev.response ?? {}) } };
 	wire._nreq = { params: {}, system: null, tools: [], messages: [], ...(ev.request || {}) };
 	wire._nresp = ev.error ? { error: ev.error } : { blocks: [], usage: null, ...(ev.response || {}) };
@@ -226,10 +245,10 @@ function inProcessModelCall(run, ev) {
 function inProcessEmbedding(run, ev, start) {
 	const replayed = ev.recordedTs != null;
 	const wire = { id: 'emb:' + ev.embeddingId, inProcess: true, num: run.wireList.length + 1, prev: run.wireList[run.wireList.length - 1] || null,
-		req: { provider: ev.provider, method: '', path: '/embeddings', url: '', headers: {}, seq: ev.seq - 0.5,
+		req: { provider: ev.provider, method: '', path: '/embeddings', url: '', headers: {}, seq: ev.seq - 0.5, ord: ev.ord - ORD_STEP / 2,
 			ts: ev.ts - (ev.durationMs || 0), ...(replayed ? { recordedTs: start } : {}),
 			body: JSON.stringify({ model: ev.model, inputs: ev.inputs, sample: ev.sample }) },
-		resp: { seq: ev.seq, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
+		resp: { seq: ev.seq, ord: ev.ord, ts: ev.ts, ...(replayed ? { recordedTs: ev.recordedTs } : {}), status: ev.error ? 'error' : 200, error: ev.error,
 			durationMs: ev.durationMs, headers: {}, body: JSON.stringify({ model: ev.model, vectors: ev.vectors, dimensions: ev.dimensions, usage: ev.usage, error: ev.error }) } };
 	wire._nreq = { params: { model: ev.model ?? undefined }, inputs: ev.sample || [], total: ev.inputs, system: null, tools: [], messages: [] };
 	wire._nresp = ev.error ? { error: ev.error }

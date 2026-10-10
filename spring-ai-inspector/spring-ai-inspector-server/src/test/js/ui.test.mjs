@@ -117,7 +117,7 @@ test('a round-trip whose response was never recorded ends its bar with the call'
 	const { lanes, acts } = buildSequence(run);
 	const model = lanes.find((l) => l.kind === 'model').key;
 
-	assert.equal(acts.find((a) => a.lane === model && a.from === call.wires[0].req.seq).to, call.resp.seq);
+	assert.equal(acts.find((a) => a.lane === model && a.from === call.wires[0].req.ord).to, call.resp.ord);
 });
 
 test('MCP tools show their connection and get a lane per MCP connection', () => {
@@ -189,8 +189,8 @@ test('MCP messages: the handshake belongs to the connection, the rest to the MCP
 	const { lanes, msgs } = buildSequence(run);
 	const sampling = run.calls.get('sampling-call');
 	const before = msgs.find((m) => m.note === 'info: Start sampling'); const after = msgs.find((m) => m.note === 'info: Done');
-	assert.ok(before.seq > tool.start.seq && before.seq < sampling.req.seq, 'the first log comes before the sampling call');
-	assert.ok(after.seq > sampling.resp.seq && after.seq < tool.end.seq, 'the late log comes after it, still inside the tool run');
+	assert.ok(before.ord > tool.start.ord && before.ord < sampling.req.ord, 'the first log comes before the sampling call');
+	assert.ok(after.ord > sampling.resp.ord && after.ord < tool.end.ord, 'the late log comes after it, still inside the tool run');
 	assert.ok(lanes.some((l) => l.label === 'MCP sampling' && l.sub === 'for poet-server'));
 	assert.ok(!lanes.some((l) => l.label === 'Sub-agent'));
 });
@@ -460,7 +460,7 @@ test('a tool whose end was never recorded holds only what ran before its call en
 	handle({ type: 'wire-request', runId: 'lost', seq: ++seq, ts: 1500, wireId: 'after', clientCallId: 'c1', provider: 'openai', method: 'POST',
 		path: '/v1/chat/completions', url: 'u', headers: {}, body: '{}' });
 
-	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp.seq });
+	const cards = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp.ord });
 	const tool = cards.indexOf('data-key="tool:t1"');
 	assert.ok(tool < cards.indexOf('data-key="wire:inside"'), 'inside the tool');
 	assert.match(cards, /<\/details><details class="wire" data-key="wire:after"/, 'after the tool, at top level');
@@ -804,6 +804,24 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	state.open.set(folded.match(/data-key="([^"]+)"/)[1], true);
 	assert.match(renderSpringMessage(m, 'added'), /^<details class="msg system added" data-key="sys:\w+" open>/);
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
+});
+
+test('events are ordered by the time recorded, not by arrival: a late-posted call precedes the wire it caused', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'r', ts: 1000, app: 'app · Demo', seq: 1 });
+	// The proxy stored the wire request first; the starter's events for the call reached the server after it.
+	handle({ type: 'wire-request', runId: 'r', ts: 1003, seq: 2, wireId: 'w1', clientCallId: 'c1', modelCallId: 'm1', provider: 'openai', path: '/v1/chat/completions', body: '{"messages":[]}' });
+	handle({ type: 'client-request', runId: 'r', ts: 1001, seq: 3, callId: 'c1', messages: [{ role: 'user', text: 'hi' }] });
+	handle({ type: 'model-request', runId: 'r', ts: 1002, seq: 4, callId: 'm1', parentId: 'c1', messages: [] });
+	handle({ type: 'wire-response', runId: 'r', ts: 1010, seq: 5, wireId: 'w1', status: 200, body: '{}' });
+	handle({ type: 'model-response', runId: 'r', ts: 1011, seq: 6, callId: 'm1', generations: [] });
+	handle({ type: 'client-response', runId: 'r', ts: 1012, seq: 7, callId: 'c1', generations: [{ role: 'assistant', text: 'yo' }] });
+	const { msgs } = buildSequence(state.runs.get('r'));
+	assert.deepEqual(msgs.map((m) => m.kind + (m.ret ? ' ret' : '')), ['call', 'model', 'model ret', 'call ret']);
+	// Same millisecond: arrival order, and the key stays an exact integer.
+	handle({ type: 'tool-start', runId: 'r', ts: 1012, seq: 8, toolId: 't1', clientCallId: 'c1', name: 'f' });
+	const events = state.runs.get('r').events;
+	assert.ok(events[6].ord < events[7].ord && Number.isInteger(events[7].ord));
 });
 
 test('a wire round-trip or model call recorded before its ChatClient call is adopted by the call', () => {

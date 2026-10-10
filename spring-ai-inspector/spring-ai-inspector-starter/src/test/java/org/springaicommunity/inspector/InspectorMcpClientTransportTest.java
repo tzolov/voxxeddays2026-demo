@@ -67,7 +67,7 @@ class InspectorMcpClientTransportTest {
 
 	private List<Map<String, Object>> mcpEvents() {
 		this.client.awaitBackground();
-		return this.events.stream().filter(e -> "mcp-message".equals(e.get("type"))).toList();
+		return events().stream().filter(e -> "mcp-message".equals(e.get("type"))).toList();
 	}
 
 	private static McpSchema.JSONRPCRequest toolsCall(int id, String tool) {
@@ -76,6 +76,12 @@ class InspectorMcpClientTransportTest {
 
 	private static McpSchema.JSONRPCNotification log(String text) {
 		return new McpSchema.JSONRPCNotification("2.0", "notifications/message", Map.of("level", "info", "data", text));
+	}
+
+	/** The events posted so far: the client posts from a background thread, so wait for it first. */
+	private List<Map<String, Object>> events() {
+		this.client.awaitBackground();
+		return this.events;
 	}
 
 	@Test

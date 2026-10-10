@@ -8,17 +8,18 @@ import { memoryStoreKey } from './memory.js';
 import { isEmbeddingWire, opKey, toolAt as toolRunning, toolOfCall, vectorOps } from './vectorops.js';
 import { NOUL_HOT, systemOneHighlights } from './wire.js';
 import { esc, fmtMs, oneLine, recordedTs } from '../util.js';
+import { ORD_STEP } from '../model.js';
 
 // ---------------------------------------------------------------- sequence view
 // Flattens a run (plus remote calls linked to its tools) into lanes and messages ordered
-// by the server's global sequence number, then draws them as an SVG sequence diagram.
+// by the time they were recorded (`ord`, see model.js), then draws them as an SVG sequence diagram.
 export const LANE_RANK = { app: 0, adv: 1, model: 2, jev: 3, tool: 4, vector: 5 };
 
 export function buildSequence(run) {
 	const lanes = new Map(); // key -> {key, label, sub, group, kind}
 	const groups = new Map(); // runId -> label
-	const msgs = []; // {seq, ts, from, to, label, kind, ret, path, note}
-	const acts = []; // activation bars {lane, from: seq, to: seq}: calls, tool runs, model round-trips, searches
+	const msgs = []; // {ord, ts, from, to, label, kind, ret, path, note}
+	const acts = []; // activation bars {lane, from: ord, to: ord}: calls, tool runs, model round-trips, searches
 	const lane = (r, kind, id, label, sub) => {
 		const key = `${r.id}|${kind}|${id}`;
 		if (!lanes.has(key)) lanes.set(key, { key, label, sub, group: r.id, kind });
@@ -63,11 +64,11 @@ export function buildSequence(run) {
 	function walkItems(r, call, items, adv, path, nest = 0) {
 		const tools = items.filter((i) => i.kind === 'tool').map((i) => i.ref);
 		// A round-trip with no recorded response ends with its call (e.g. the call failed), or runs on while the call does.
-		const openEnd = call?.resp ? call.resp.seq : Infinity;
+		const openEnd = call?.resp ? call.resp.ord : Infinity;
 		// Who made a step: the tool running at that moment (from its lane), else the advisors.
-		const toolAt = (seq) => toolRunning(tools, seq, openEnd);
-		const fromAt = (seq) => {
-			const t = toolAt(seq);
+		const toolAt = (ord) => toolRunning(tools, ord, openEnd);
+		const fromAt = (ord) => {
+			const t = toolAt(ord);
 			return t ? toolLane(r, t) : adv;
 		};
 		// Vector store adds and searches: the embedding calls made meanwhile are the store's own,
@@ -77,13 +78,13 @@ export function buildSequence(run) {
 		const { ops, opOf } = vectorOps(items, call ? call.searches : (r.searches || []));
 		const sourceOf = (w) => {
 			const op = opOf(w);
-			return op ? vectorLane(op.ev) : fromAt(w.req.seq);
+			return op ? vectorLane(op.ev) : fromAt(w.req.ord);
 		};
 		// Where an arrow's card is in the Cards view, to open it: inside the card of the tool that
 		// made it, and of the vector store operation, as the cards nest them (see renderItems).
-		const inTool = (seq) => { const t = toolAt(seq); return t ? ['tool:' + t.id] : []; };
-		const opPath = (op) => [...path, ...inTool(op.seq), opKey(op.ev)];
-		const pathOf = (w) => { const op = opOf(w); return op ? opPath(op) : [...path, ...inTool(w.req.seq)]; };
+		const inTool = (ord) => { const t = toolAt(ord); return t ? ['tool:' + t.id] : []; };
+		const opPath = (op) => [...path, ...inTool(op.ord), opKey(op.ev)];
+		const pathOf = (w) => { const op = opOf(w); return op ? opPath(op) : [...path, ...inTool(w.req.ord)]; };
 		for (let i = 0; i < items.length;) {
 			let j = i;
 			// Fold runs of systemOne checks or embedding calls to the same lane into one exchange.
@@ -93,16 +94,16 @@ export function buildSequence(run) {
 				const group = items.slice(i, j).map((it) => it.ref);
 				const to = wireLane(r, group[0]); const kind = fold === 'jev' ? 'jev' : 'model'; const gpath = [...pathOf(group[0]), fold + ':' + group[0].id];
 				// Calls may answer out of order: the group is done at its latest response.
-				const done = group.every((w) => w.resp) ? group.reduce((a, w) => (w.resp.seq > a.resp.seq ? w : a)) : null;
+				const done = group.every((w) => w.resp) ? group.reduce((a, w) => (w.resp.ord > a.resp.ord ? w : a)) : null;
 				group.forEach((w) => addTokens(to, w));
 				const totals = fold === 'embed' ? embeddingTotals(group) : null;
 				const src = sourceOf(group[0]);
-				msgs.push({ seq: group[0].req.seq, ts: group[0].req.ts, from: src, to, kind, path: gpath,
+				msgs.push({ ord: group[0].req.ord, ts: group[0].req.ts, from: src, to, kind, path: gpath,
 					label: totals ? `${group.length} embedding calls · ${totals.inputs} inputs` : `${group.length} systemOne checks` });
-				if (done) msgs.push({ seq: done.resp.seq, ts: done.resp.ts, from: to, to: src, ret: true, kind, path: gpath,
+				if (done) msgs.push({ ord: done.resp.ord, ts: done.resp.ts, from: to, to: src, ret: true, kind, path: gpath,
 					label: totals ? `${totals.vectors} vectors · ${fmtMs(totals.ms ?? 0)}`
 						: `${group.filter((w) => Object.values(normResponse(w)?.answers || {}).some((a) => a.type === 'noul' && a.noul >= NOUL_HOT)).length} with P(true) ≥ ${NOUL_HOT}` });
-				acts.push({ lane: to, from: group[0].req.seq, to: done ? done.resp.seq : openEnd, nest: 0 });
+				acts.push({ lane: to, from: group[0].req.ord, to: done ? done.resp.ord : openEnd, nest: 0 });
 				i = j;
 				continue;
 			}
@@ -118,44 +119,44 @@ export function buildSequence(run) {
 					: `#${w.num} · ${req?.messages?.length ?? '?'} msgs`;
 				const src = sourceOf(w);
 				const wpath = [...pathOf(w), 'wire:' + w.id];
-				msgs.push({ seq: w.req.seq, ts: w.req.ts, from: src, to, label, kind, path: wpath });
-				if (w.resp) msgs.push({ seq: w.resp.seq, ts: w.resp.ts, from: to, to: src, ret: true, kind, label: wireReturn(w), path: wpath });
-				acts.push({ lane: to, from: w.req.seq, to: w.resp ? w.resp.seq : openEnd, nest: 0 });
+				msgs.push({ ord: w.req.ord, ts: w.req.ts, from: src, to, label, kind, path: wpath });
+				if (w.resp) msgs.push({ ord: w.resp.ord, ts: w.resp.ts, from: to, to: src, ret: true, kind, label: wireReturn(w), path: wpath });
+				acts.push({ lane: to, from: w.req.ord, to: w.resp ? w.resp.ord : openEnd, nest: 0 });
 			}
 			else if (it.kind === 'model' && isAdvisorOnly(it.ref)) {
 				// A model call without HTTP (e.g. a model running in the JVM): as the advisor saw it.
 				const mc = it.ref; const model = modelOf(mc);
 				const to = lane(r, 'model', model, model, providerOf(mc));
 				addTokens(to, null, usageOfModelCall(mc));
-				const p = [...path, ...inTool(mc.req.seq), 'model:' + mc.id];
-				msgs.push({ seq: mc.req.seq, ts: mc.req.ts, from: adv, to, kind: 'model', path: p,
+				const p = [...path, ...inTool(mc.req.ord), 'model:' + mc.id];
+				msgs.push({ ord: mc.req.ord, ts: mc.req.ts, from: adv, to, kind: 'model', path: p,
 					label: `#${mc.num} · ${(mc.req.messages || []).length} msgs · no HTTP` });
 				if (mc.resp) {
 					const { toolCalls, finish } = modelCallOutcome(mc);
 					const calls = toolCalls.map((t) => t.name);
-					msgs.push({ seq: mc.resp.seq, ts: mc.resp.ts, from: to, to: adv, ret: true, kind: 'model', path: p,
+					msgs.push({ ord: mc.resp.ord, ts: mc.resp.ts, from: to, to: adv, ret: true, kind: 'model', path: p,
 						label: `${mc.resp.error ? '⚠ error' : calls.length ? 'tool_use ' + calls.join(', ') : finish || 'response'} · ${fmtMs(mc.resp.durationMs)}` });
 				}
-				acts.push({ lane: to, from: mc.req.seq, to: mc.resp ? mc.resp.seq : openEnd, nest: 0 });
+				acts.push({ lane: to, from: mc.req.ord, to: mc.resp ? mc.resp.ord : openEnd, nest: 0 });
 			}
 			else if (it.kind === 'tool') {
 				const t = it.ref; const to = toolLane(r, t);
-				msgs.push({ seq: t.start.seq, ts: t.start.ts, from: adv, to, kind: 'tool', label: `${t.start.name}(${oneLine(t.start.arguments, 40)})`, path: [...path, 'tool:' + t.id] });
+				msgs.push({ ord: t.start.ord, ts: t.start.ts, from: adv, to, kind: 'tool', label: `${t.start.name}(${oneLine(t.start.arguments, 40)})`, path: [...path, 'tool:' + t.id] });
 				for (const rc of t.remoteCalls || []) walkCall(rc.run, rc, to, [...path, 'tool:' + t.id], 0);
 				// What the MCP server sends while the tool runs (logs, progress, sampling requests): notes on its lane.
-				// MCP messages are posted in the background, so their seq can come late (even after the tool's end):
+				// MCP messages are built in the background, so their time can be late (even after the tool's end):
 				// each note goes right after the last of the tool's start and its nested calls' steps recorded before it.
 				const anchors = [t.start, ...items.filter((i) => i.kind === 'call' && toolOfCall(tools, i.ref, openEnd) === t)
-					.flatMap((i) => [i.ref.req, i.ref.resp].filter(Boolean))].sort((a, b) => recordedTs(a) - recordedTs(b) || a.seq - b.seq);
+					.flatMap((i) => [i.ref.req, i.ref.resp].filter(Boolean))].sort((a, b) => recordedTs(a) - recordedTs(b) || a.ord - b.ord);
 				(t.mcp || []).filter((x) => x.direction === 'in' && x.kind !== 'response').forEach((m, i) => {
 					const anchor = anchors.filter((a) => recordedTs(a) <= recordedTs(m)).pop() ?? t.start;
-					msgs.push({ seq: anchor.seq + 0.001 * (i + 1), ts: m.ts, from: to, to, kind: 'tool', path: [...path, 'tool:' + t.id],
+					msgs.push({ ord: anchor.ord + Math.min(i + 1, ORD_STEP - 1), ts: m.ts, from: to, to, kind: 'tool', path: [...path, 'tool:' + t.id],
 						note: oneLine(m.method === 'notifications/message' ? mcpSummary(m) : m.method.replace(/^notifications\//, ''), 36) });
 				});
 				if (t.end) {
-					msgs.push({ seq: t.end.seq, ts: t.end.ts, from: to, to: adv, ret: true, kind: 'tool', path: [...path, 'tool:' + t.id],
+					msgs.push({ ord: t.end.ord, ts: t.end.ts, from: to, to: adv, ret: true, kind: 'tool', path: [...path, 'tool:' + t.id],
 						label: `${t.end.error ? '⚠ ' + oneLine(t.end.error, 40) : oneLine(t.end.result, 40)} · ${fmtMs(t.end.durationMs)}` });
-					acts.push({ lane: to, from: t.start.seq, to: t.end.seq, nest: 0 });
+					acts.push({ lane: to, from: t.start.ord, to: t.end.ord, nest: 0 });
 				}
 			}
 			else if (it.kind === 'call') {
@@ -164,7 +165,7 @@ export function buildSequence(run) {
 				// tool's, as for remote agents); otherwise an advisor made it (e.g. RAG query rewriting): a self-call.
 				const byTool = toolOfCall(tools, nested, openEnd);
 				// A call made while the MCP server's sampling request is open serves that request
-				// (by time: MCP messages are posted in the background, so their seq may come later).
+				// (MCP messages are built in the background, so their time may be later).
 				const at = recordedTs(nested.req);
 				const open = (byTool?.mcp || []).filter((m) => m.method === 'sampling/createMessage' && m.kind === 'request' && m.direction === 'in'
 					&& recordedTs(m) <= at);
@@ -176,20 +177,20 @@ export function buildSequence(run) {
 		}
 		// Each add or search: a request before the embedding calls it made, a return when it reported.
 		for (const op of ops) {
-			const { ev, seq: at } = op;
+			const { ev, ord: at } = op;
 			const to = vectorLane(ev);
 			const from = fromAt(at);
 			const opp = opPath(op);
 			const search = ev.query !== undefined;
-			msgs.push({ seq: at, ts: ev.start?.ts ?? ev.ts, from, to, kind: 'vector', path: opp,
+			msgs.push({ ord: at, ts: ev.start?.ts ?? ev.ts, from, to, kind: 'vector', path: opp,
 				label: search ? `🔎 ${oneLine(ev.query, 40)}` : ev.op === 'delete' || ev.type === 'vector-delete' ? `delete ${ev.filter ? 'by filter' : `${ev.count} ids`}` : `ingest ${ev.count} chunks` });
 			if (!ev.pending) {
-				msgs.push({ seq: ev.seq, ts: ev.ts, from: to, to: from, ret: true, kind: 'vector', path: opp,
+				msgs.push({ ord: ev.ord, ts: ev.ts, from: to, to: from, ret: true, kind: 'vector', path: opp,
 					label: ev.error ? `⚠ ${oneLine(ev.error, 40)}`
 						: search ? `${searchSummary(ev)} · ${fmtMs(ev.durationMs)}`
 						: `${ev.count} stored · ${fmtMs(ev.durationMs)}` });
 			}
-			acts.push({ lane: to, from: at, to: ev.pending ? openEnd : ev.seq, nest: 0 });
+			acts.push({ lane: to, from: at, to: ev.pending ? openEnd : ev.ord, nest: 0 });
 		}
 	}
 
@@ -205,20 +206,20 @@ export function buildSequence(run) {
 		const path = [...parentPath, 'call:' + call.id];
 		const user = [...(call.req.messages || [])].reverse().find((m) => m.role === 'user');
 		const remote = r !== run;
-		msgs.push({ seq: call.req.seq, ts: call.req.ts, from, to: adv, kind: remote ? 'remote' : 'call', path,
+		msgs.push({ ord: call.req.ord, ts: call.req.ts, from, to: adv, kind: remote ? 'remote' : 'call', path,
 			label: `${remote ? 'A2A · ' : ''}#${call.num} “${oneLine(user?.text || '', 44)}”` });
 		walkItems(r, call, call.items, adv, path, nest);
 		const fresh = call.memory.after ? countWritten(call) : 0;
 		// The note opens the "written by this call" folds of the memory step.
 		const grew = (s) => s.kind !== 'files' && s.items.length > ((call.memory.before || []).find((b) => b.kind === s.kind && b.id === s.id)?.items.length || 0);
 		const memPath = [...path, ...(call.memory.after || []).filter(grew).map((s) => memoryStoreKey(call.id, s) + ':new')];
-		if (fresh) msgs.push({ seq: call.memory.afterSeq, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path: memPath });
+		if (fresh) msgs.push({ ord: call.memory.afterOrd, ts: call.resp?.ts, from: adv, to: adv, note: `memory +${fresh}`, kind: 'call', path: memPath });
 		if (call.resp) {
 			const answer = call.resp.error ? '⚠ ' + call.resp.error : (call.resp.generations || []).filter((g) => !g.thinking).map((g) => g.text).join(' ');
-			msgs.push({ seq: call.resp.seq, ts: call.resp.ts, from: adv, to: from, ret: true, kind: remote ? 'remote' : 'call', path, label: oneLine(answer, 48) });
-			acts.push({ lane: adv, from: call.req.seq, to: call.resp.seq, nest });
+			msgs.push({ ord: call.resp.ord, ts: call.resp.ts, from: adv, to: from, ret: true, kind: remote ? 'remote' : 'call', path, label: oneLine(answer, 48) });
+			acts.push({ lane: adv, from: call.req.ord, to: call.resp.ord, nest });
 		}
-		else acts.push({ lane: adv, from: call.req.seq, to: Infinity, nest });
+		else acts.push({ lane: adv, from: call.req.ord, to: Infinity, nest });
 	}
 
 	for (const it of run.items) {
@@ -226,7 +227,7 @@ export function buildSequence(run) {
 	}
 	walkItems(run, null, run.items.filter((i) => i.kind !== 'call'), app, []);
 
-	msgs.sort((a, b) => a.seq - b.seq);
+	msgs.sort((a, b) => a.ord - b.ord);
 	// Lanes: this run's group first, then remote groups; inside a group by kind.
 	const groupOrder = [...groups.keys()];
 	const laneList = [...lanes.values()].sort((a, b) => groupOrder.indexOf(a.group) - groupOrder.indexOf(b.group)
@@ -259,8 +260,8 @@ export function renderSequence(run, scaled) {
 		if (i > 0) y += ROW + (scaled ? Math.min(180, Math.max(0, (m.ts - msgs[i - 1].ts) / 25)) : 0);
 		ys.push(y);
 	});
-	const ySeq = (seq) => { // y of the first message at or after seq
-		const i = msgs.findIndex((m) => m.seq >= seq);
+	const ySeq = (ord) => { // y of the first message at or after ord
+		const i = msgs.findIndex((m) => m.ord >= ord);
 		return i < 0 ? ys[ys.length - 1] + ROW / 2 : ys[i];
 	};
 	const height = ys[ys.length - 1] + ROW + 10;

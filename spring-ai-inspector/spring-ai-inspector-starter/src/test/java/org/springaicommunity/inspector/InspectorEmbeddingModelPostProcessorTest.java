@@ -33,6 +33,12 @@ class InspectorEmbeddingModelPostProcessorTest {
 			.postProcessAfterInitialization(model, "embeddingModel");
 	}
 
+	/** The events posted so far: the client posts from a background thread, so wait for it first. */
+	private List<Map<String, Object>> events() {
+		this.client.awaitBackground();
+		return this.events;
+	}
+
 	@Test
 	void reportsEachOutermostCallOnceWithItsInputsVectorsAndUsage() {
 		EmbeddingModel model = wrap(new JinferEmbeddingModel(), new MockEnvironment());
@@ -40,15 +46,15 @@ class InspectorEmbeddingModelPostProcessorTest {
 		model.embed("one text"); // default method delegating to call() on the model itself
 		model.embed(List.of("a", "b"));
 
-		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("embedding-call", "embedding-call");
+		assertThat(events()).extracting(e -> e.get("type")).containsExactly("embedding-call", "embedding-call");
 		// A bare vector carries no metadata: the model is the configured one (none here).
-		assertThat(this.events.get(0)).containsEntry("provider", "jinfer")
+		assertThat(events().get(0)).containsEntry("provider", "jinfer")
 			.containsEntry("model", null)
 			.containsEntry("inputs", 1)
 			.containsEntry("sample", List.of("one text"))
 			.containsEntry("vectors", 1)
 			.containsEntry("dimensions", 3);
-		assertThat(this.events.get(1)).containsEntry("inputs", 2).containsEntry("vectors", 2);
+		assertThat(events().get(1)).containsEntry("inputs", 2).containsEntry("vectors", 2);
 	}
 
 	@Test
@@ -58,9 +64,9 @@ class InspectorEmbeddingModelPostProcessorTest {
 		model.call(new EmbeddingRequest(List.of("x"), null));
 		assertThatIllegalStateException().isThrownBy(() -> model.call(new EmbeddingRequest(List.of("boom"), null)));
 
-		assertThat(this.events.get(0)).containsEntry("model", "qwen3-embedding")
+		assertThat(events().get(0)).containsEntry("model", "qwen3-embedding")
 			.containsEntry("usage", Map.of("input", 4));
-		assertThat(this.events.get(1)).containsEntry("error", "IllegalStateException: model not loaded");
+		assertThat(events().get(1)).containsEntry("error", "IllegalStateException: model not loaded");
 	}
 
 	@Test
@@ -90,7 +96,7 @@ class InspectorEmbeddingModelPostProcessorTest {
 
 		model.call(new EmbeddingRequest(List.of("x"), null));
 
-		assertThat(this.events).singleElement().satisfies(e -> assertThat(e).containsEntry("model", "m").doesNotContainKey("usage"));
+		assertThat(events()).singleElement().satisfies(e -> assertThat(e).containsEntry("model", "m").doesNotContainKey("usage"));
 	}
 
 	@Test
@@ -104,7 +110,7 @@ class InspectorEmbeddingModelPostProcessorTest {
 
 		model.embed("x");
 
-		assertThat(this.events.get(0)).containsEntry("model", "Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0");
+		assertThat(events().get(0)).containsEntry("model", "Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0");
 	}
 
 	/** Non-final, like most embedding models; named like jinfer's. */

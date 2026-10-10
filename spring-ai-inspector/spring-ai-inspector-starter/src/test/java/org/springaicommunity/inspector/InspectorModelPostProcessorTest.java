@@ -66,13 +66,19 @@ class InspectorModelPostProcessorTest {
 	/** The one event, once the background thread has uploaded the media and posted it. */
 	private Map<String, Object> event() {
 		this.client.awaitBackground();
-		assertThat(this.events).hasSize(1);
-		return this.events.get(0);
+		assertThat(events()).hasSize(1);
+		return events().get(0);
 	}
 
 	@SuppressWarnings("unchecked")
 	private static Map<String, Object> map(Object o) {
 		return (Map<String, Object>) o;
+	}
+
+	/** The events posted so far: the client posts from a background thread, so wait for it first. */
+	private List<Map<String, Object>> events() {
+		this.client.awaitBackground();
+		return this.events;
 	}
 
 	@Test
@@ -111,7 +117,7 @@ class InspectorModelPostProcessorTest {
 		assertThat(model).isSameAs(bean);
 		model.call(new ImagePrompt("x"));
 		this.client.awaitBackground();
-		assertThat(this.events).isEmpty();
+		assertThat(events()).isEmpty();
 		assertThat(this.uploads).isEmpty();
 	}
 
@@ -144,15 +150,15 @@ class InspectorModelPostProcessorTest {
 		model.call(new AudioTranscriptionPrompt(new InputStreamResource(new java.io.ByteArrayInputStream(wav)), () -> "whisper-1"));
 
 		this.client.awaitBackground();
-		assertThat(this.events).hasSize(2);
-		Map<String, Object> first = this.events.get(0);
+		assertThat(events()).hasSize(2);
+		Map<String, Object> first = events().get(0);
 		assertThat(first).containsEntry("kind", "transcription").containsEntry("model", "whisper-1");
 		List<Map<String, Object>> files = (List<Map<String, Object>>) map(first.get("request")).get("files");
 		assertThat(files.get(0)).containsEntry("filename", "question.wav").containsEntry("contentType", "audio/wav")
 			.containsEntry("size", wav.length).containsKey("blobId");
 		assertThat(map(first.get("response"))).containsEntry("text", "What is the weather?");
 		// The stream was not consumed by the inspector: no upload, and the model still read it.
-		List<Map<String, Object>> streamed = (List<Map<String, Object>>) map(this.events.get(1).get("request")).get("files");
+		List<Map<String, Object>> streamed = (List<Map<String, Object>>) map(events().get(1).get("request")).get("files");
 		assertThat(streamed.get(0)).doesNotContainKey("blobId");
 		assertThat(this.uploads).hasSize(1);
 	}

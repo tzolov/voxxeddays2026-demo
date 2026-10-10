@@ -21,6 +21,7 @@ class InspectorClientTest {
 			throw new IllegalStateException("boom");
 		}));
 		client.send("y", () -> Map.of("k", "v"));
+		client.awaitBackground();
 
 		assertThat(sent).hasSize(1);
 		assertThat(sent.get(0)).contains("\"type\":\"y\"").contains("\"runId\":\"run-1\"").contains("\"k\":\"v\"");
@@ -29,7 +30,9 @@ class InspectorClientTest {
 	@Test
 	void everyEventCarriesTheFormatVersionAndTheEnvelope() {
 		List<String> sent = new ArrayList<>();
-		new InspectorClient("run-1", sent::add).send("x", () -> Map.of("k", "v"));
+		InspectorClient client = new InspectorClient("run-1", sent::add);
+		client.send("x", () -> Map.of("k", "v"));
+		client.awaitBackground();
 
 		Map<String, Object> event = new org.springframework.ai.util.JsonHelper().fromJsonToMap(sent.get(0));
 		assertThat(event).containsEntry("v", InspectorClient.EVENTS_VERSION)
@@ -41,13 +44,13 @@ class InspectorClientTest {
 	}
 
 	@Test
-	void anEventQueuesBehindAnUploadButNotBehindOtherBackgroundWork() throws Exception {
+	void eventsAndUploadsLeaveInOrderFromTheBackgroundThreadWithoutBlockingTheCaller() throws Exception {
 		List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
-		java.util.concurrent.CountDownLatch uploadMayFinish = new java.util.concurrent.CountDownLatch(1);
-		InspectorClient client = new InspectorClient("run-1", body -> order.add(body.contains("\"type\":\"a\"") ? "a"
-				: body.contains("\"type\":\"b\"") ? "b" : "c"), (id, bytes, type) -> {
+		java.util.concurrent.CountDownLatch inspectorAnswers = new java.util.concurrent.CountDownLatch(1);
+		InspectorClient client = new InspectorClient("run-1", body -> order.add(body.contains("\"type\":\"a\"") ? "a" : "b"),
+				(id, bytes, type) -> {
 					try {
-						uploadMayFinish.await();
+						inspectorAnswers.await(); // a slow inspector
 					}
 					catch (InterruptedException ex) {
 						Thread.currentThread().interrupt();
@@ -55,18 +58,14 @@ class InspectorClientTest {
 					order.add("upload");
 				});
 
-		client.sendAsync("a", Map::of); // async work pending: a synchronous event still goes out at once
-		client.send("b", Map::of);
-		client.awaitBackground();
-		assertThat(order).containsExactly("a", "b").as("'b' was posted inline, 'a' from the background thread");
-		order.clear();
-
 		InspectorClient.Media media = client.sendBlob(new byte[] { 1, 2, 3 }, "image/png");
-		client.send("c", () -> Map.of("blobId", media.id())); // names the blob: waits for it
-		assertThat(order).isEmpty();
-		uploadMayFinish.countDown();
+		client.send("a", () -> Map.of("blobId", media.id())); // names the blob: must follow it
+		client.send("b", Map::of);
+		assertThat(order).isEmpty(); // the caller went on while the inspector hadn't answered
+
+		inspectorAnswers.countDown();
 		client.awaitBackground();
-		assertThat(order).containsExactly("upload", "c");
+		assertThat(order).containsExactly("upload", "a", "b");
 	}
 
 	@Test
@@ -77,11 +76,11 @@ class InspectorClientTest {
 		client.shutdown();
 
 		assertThatNoException().isThrownBy(() -> {
-			assertThat(client.sendBlob(new byte[] { 1 }, "image/png")).isNull();
-			client.sendAsync("x", Map::of);
-			client.send("y", Map::of);
+			client.sendBlob(new byte[] { 1 }, "image/png");
+			client.send("x", Map::of);
+			client.sendLater("y", Map::of);
 		});
-		assertThat(sent).hasSize(1); // the synchronous event still went out on the caller's thread
+		assertThat(sent).isEmpty(); // the application is stopping: dropped, not thrown
 	}
 
 	@Test
@@ -97,10 +96,12 @@ class InspectorClientTest {
 
 		client.announce("run-start", () -> Map.of("app", "demo"));
 		client.send("client-request", () -> Map.of("callId", "c1")); // fails: the inspector is down
+		client.awaitBackground();
 		assertThat(sent).hasSize(1);
 
 		// Still paused: nothing is posted, nothing is re-announced.
 		client.send("client-response", () -> Map.of("callId", "c1"));
+		client.awaitBackground();
 		assertThat(sent).hasSize(1);
 
 		// Back after the pause: the run is introduced again before the next event.
@@ -108,12 +109,14 @@ class InspectorClientTest {
 		pausedUntil.setAccessible(true);
 		pausedUntil.set(client, 0L);
 		client.send("client-request", () -> Map.of("callId", "c2"));
+		client.awaitBackground();
 
 		assertThat(sent).hasSize(3);
 		assertThat(sent.get(1)).contains("\"type\":\"run-start\"").contains("\"app\":\"demo\"").contains("\"reannounce\":true");
 		assertThat(sent.get(2)).contains("\"callId\":\"c2\"");
 		// Once is enough: the next event goes alone.
 		client.send("client-response", () -> Map.of("callId", "c2"));
+		client.awaitBackground();
 		assertThat(sent).hasSize(4);
 	}
 
@@ -126,6 +129,7 @@ class InspectorClientTest {
 			built.incrementAndGet();
 			return Map.of();
 		}));
+		client.awaitBackground(); // the failed post pauses publishing
 		client.send("x", () -> {
 			built.incrementAndGet();
 			return Map.of();

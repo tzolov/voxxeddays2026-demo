@@ -60,13 +60,19 @@ class InspectorToolObservationHandlerTest {
 		return Observation.createNotStarted("tool", () -> toolContext(toolCallId), this.registry).start();
 	}
 
+	/** The events posted so far: the client posts from a background thread, so wait for it first. */
+	private List<Map<String, Object>> events() {
+		this.client.awaitBackground();
+		return this.events;
+	}
+
 	@Test
 	void reportsStartAndEnd() {
 		observe("call-1").stop();
 
-		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
-		assertThat(this.events.get(0).get("name")).isEqualTo("airbnb_search");
-		assertThat(this.events.get(1).get("toolId")).isEqualTo(this.events.get(0).get("toolId"));
+		assertThat(events()).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
+		assertThat(events().get(0).get("name")).isEqualTo("airbnb_search");
+		assertThat(events().get(1).get("toolId")).isEqualTo(events().get(0).get("toolId"));
 	}
 
 	@Test
@@ -85,8 +91,8 @@ class InspectorToolObservationHandlerTest {
 			return answer("done");
 		}).prompt("plan my trip").call().content();
 
-		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
-		Map<String, Object> toolStart = this.events.stream().filter(e -> "tool-start".equals(e.get("type"))).findFirst().orElseThrow();
+		List<Map<String, Object>> requests = events().stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		Map<String, Object> toolStart = events().stream().filter(e -> "tool-start".equals(e.get("type"))).findFirst().orElseThrow();
 		assertThat(requests).hasSize(3);
 		assertThat(requests.get(0)).doesNotContainKey("parentToolId");
 		assertThat(toolStart).containsEntry("clientCallId", requests.get(0).get("callId"));
@@ -121,12 +127,12 @@ class InspectorToolObservationHandlerTest {
 		this.client.awaitBackground();
 
 		assertThat(text).isEqualTo("streamed");
-		Map<String, Object> request = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).findFirst().orElseThrow();
-		Map<String, Object> modelRequest = this.events.stream().filter(e -> "model-request".equals(e.get("type"))).findFirst().orElseThrow();
-		Map<String, Object> toolStart = this.events.stream().filter(e -> "tool-start".equals(e.get("type"))).findFirst().orElseThrow();
+		Map<String, Object> request = events().stream().filter(e -> "client-request".equals(e.get("type"))).findFirst().orElseThrow();
+		Map<String, Object> modelRequest = events().stream().filter(e -> "model-request".equals(e.get("type"))).findFirst().orElseThrow();
+		Map<String, Object> toolStart = events().stream().filter(e -> "tool-start".equals(e.get("type"))).findFirst().orElseThrow();
 		assertThat(modelRequest).containsEntry("parentId", request.get("callId"));
 		assertThat(toolStart).containsEntry("clientCallId", request.get("callId"));
-		assertThat(this.events).extracting(e -> e.get("type")).contains("tool-end", "model-response", "client-response");
+		assertThat(events()).extracting(e -> e.get("type")).contains("tool-end", "model-response", "client-response");
 	}
 
 	@Test
@@ -136,7 +142,7 @@ class InspectorToolObservationHandlerTest {
 
 		observe("call-1").stop();
 
-		assertThat(this.events.get(0).get("mcp")).isEqualTo(Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
+		assertThat(events().get(0).get("mcp")).isEqualTo(Map.of("connection", "airbnb", "server", "airbnb-mcp", "tool", "airbnb_search"));
 	}
 
 	@Test
@@ -145,7 +151,7 @@ class InspectorToolObservationHandlerTest {
 
 		observe("call-1").stop(); // described "search"
 
-		assertThat(this.events.get(0)).doesNotContainKey("mcp");
+		assertThat(events().get(0)).doesNotContainKey("mcp");
 	}
 
 	@Test
@@ -155,14 +161,14 @@ class InspectorToolObservationHandlerTest {
 
 		observe("call-1").stop();
 
-		assertThat(this.events.get(0)).containsKey("mcp");
+		assertThat(events().get(0)).containsKey("mcp");
 	}
 
 	@Test
 	void aLocalToolHasNoMcpOrigin() {
 		observe("call-1").stop();
 
-		assertThat(this.events.get(0)).doesNotContainKey("mcp");
+		assertThat(events().get(0)).doesNotContainKey("mcp");
 	}
 
 	@Test
@@ -173,7 +179,7 @@ class InspectorToolObservationHandlerTest {
 		inner.stop();
 		outer.stop();
 
-		assertThat(this.events).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
+		assertThat(events()).extracting(e -> e.get("type")).containsExactly("tool-start", "tool-end");
 	}
 
 }

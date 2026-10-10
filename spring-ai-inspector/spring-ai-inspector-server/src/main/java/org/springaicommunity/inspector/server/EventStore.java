@@ -16,8 +16,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * preloader: an event posted by a starter or recorded by the proxy is completed with what the
  * server knows ({@link Correlator}), kept ({@link EventLog}) and sent to the browsers
  * ({@link SseBroadcaster}), in that order and under one lock, so the order recorded is the
- * order seen. Advisor events are posted synchronously by the starter, so that order is the
- * real one.
+ * order seen. The starter posts from one background thread, so a run's own events arrive in
+ * the order they were built; wire events, recorded here as the proxy forwards, may come a
+ * moment earlier than the starter's event for the same call (the UI orders by time).
  *
  * <p>Imported runs (a file exported from the UI, a preloaded recording) are display only:
  * they keep the links they have, register no upstreams, and get a fresh run id so the same

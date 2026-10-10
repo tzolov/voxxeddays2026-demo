@@ -2,7 +2,8 @@ import { apiHeaders } from './state.js';
 
 // ---------------------------------------------------------------- export / import
 export function exportRun(run) {
-	const blob = new Blob([JSON.stringify(run.events, null, 1)], { type: 'application/json' });
+	// Without the UI's own order key (see model.js): a recording holds what was received.
+	const blob = new Blob([JSON.stringify(run.events.map(({ ord, ...e }) => e), null, 1)], { type: 'application/json' });
 	const a = document.createElement('a');
 	a.href = URL.createObjectURL(blob);
 	a.download = `${run.app.split(' · ')[0].replace(/[^\w.-]+/g, '_')}-${run.id}.json`;

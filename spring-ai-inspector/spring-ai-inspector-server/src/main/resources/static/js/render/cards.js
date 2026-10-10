@@ -116,12 +116,12 @@ function renderEmbeddingGroup(group) {
 // systemOne check, an embedding), model calls without HTTP, and vector store adds and searches,
 // these with the embedding round-trips they made inside them (see vectorops.js). Like the
 // sequence view, by timing: with tools running in parallel, the first one open gets them.
-// ctx: the call's searches, its id (so a search's hits can open the Retrieval step) and the seq
+// ctx: the call's searches, its id (so a search's hits can open the Retrieval step) and the order key (ord)
 // it ended at (a tool whose end was never recorded runs until then).
 export function renderItems(all, latest, ctx = {}) {
 	const { ops, opOf } = vectorOps(all, ctx.searches || []);
 	const tools = all.filter((i) => i.kind === 'tool').map((i) => i.ref);
-	const seqOf = (it) => (it.kind === 'vop' ? it.ref.seq : it.kind === 'tool' ? it.ref.start.seq : it.ref.req?.seq ?? it.ref.seq ?? 0);
+	const seqOf = (it) => (it.kind === 'vop' ? it.ref.ord : it.kind === 'tool' ? it.ref.start.ord : it.ref.req?.ord ?? it.ref.ord ?? 0);
 	const inTool = new Map(tools.map((t) => [t, []])); const top = [];
 	const place = (it) => {
 		const tool = it.kind === 'call' ? toolOfCall(tools, it.ref, ctx.callEnd) // a sub-agent, inside its tool
@@ -269,7 +269,7 @@ export function renderCall(call, isLatest) {
 	else s3 = '<div class="notice info"><span class="spinner"></span> advisors running…</div>';
 
 	// 4. wire round-trips and tool runs, with what each tool did inside it (sub-agents, searches, ...)
-	let s4 = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp?.seq });
+	let s4 = renderItems(call.items, null, { searches: call.searches, callId: call.id, callEnd: call.resp?.ord });
 	if (!s4) s4 = first ? '<div class="notice info">No wire traffic captured for this call (provider not routed through the inspector).</div>'
 		: '<div class="notice info">—</div>';
 

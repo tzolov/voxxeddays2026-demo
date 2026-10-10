@@ -16,7 +16,7 @@ Every event is a JSON object with:
 | `type` | emitter | the event type, below |
 | `runId` | emitter | the run (one application process) the event belongs to; replaced on import and replay |
 | `ts` | emitter | epoch milliseconds when the event was built (the server fills it in when missing) |
-| `seq` | server | position in the store, increasing; removed on import and assigned again there |
+| `seq` | server | arrival position in the store, increasing; removed on import and assigned again there. Arrival is not the order of things: the starter posts in the background, so the UI orders by `ts` (then `seq`) |
 
 Ids are short random strings. A `callId` names a ChatClient call (`client-request`) or a model round-trip
 (`model-request`); other events point at them as `clientCallId` and `modelCallId`, or at each other with

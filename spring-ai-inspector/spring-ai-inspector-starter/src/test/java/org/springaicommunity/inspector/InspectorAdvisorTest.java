@@ -54,18 +54,24 @@ class InspectorAdvisorTest {
 		return ChatClient.builder(model, this.registry, null, null);
 	}
 
+	/** The events posted so far: the client posts from a background thread, so wait for it first. */
+	private List<Map<String, Object>> events() {
+		this.client.awaitBackground();
+		return this.events;
+	}
+
 	@Test
 	void reportsTheCallAndTheModelPhaseAsATree() {
 		String answer = chatClient().prompt("hi").call().content();
 
 		assertThat(answer).isEqualTo("hello");
-		assertThat(this.events).extracting(e -> e.get("type"))
+		assertThat(events()).extracting(e -> e.get("type"))
 			.containsExactly("client-request", "model-request", "model-response", "client-response");
-		Map<String, Object> clientRequest = this.events.get(0);
-		assertThat(this.events.get(1).get("parentId")).isEqualTo(clientRequest.get("callId"));
+		Map<String, Object> clientRequest = events().get(0);
+		assertThat(events().get(1).get("parentId")).isEqualTo(clientRequest.get("callId"));
 		assertThat(clientRequest.get("runId")).isEqualTo("run-1");
 		assertThat(clientRequest.get("messages").toString()).contains("hi");
-		assertThat(this.events.get(3).get("generations").toString()).contains("hello");
+		assertThat(events().get(3).get("generations").toString()).contains("hello");
 	}
 
 	@Test
@@ -85,14 +91,14 @@ class InspectorAdvisorTest {
 		chat.prompt().user(u -> u.text("make it night").media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(png(800)))).call().content();
 		uploading.awaitBackground();
 
-		Map<String, Object> sent = firstMedia(this.events.get(0), "messages");
+		Map<String, Object> sent = firstMedia(events().get(0), "messages");
 		assertThat(sent).containsEntry("type", "image/png").containsEntry("size", 800);
 		assertThat(sent.get("blobId").toString()).matches("[0-9a-f]{16}");
-		assertThat(firstMedia(this.events.get(1), "messages")).isEqualTo(sent); // the MODEL view: the same blob
-		Map<String, Object> got = firstMedia(this.events.get(2), "generations");
+		assertThat(firstMedia(events().get(1), "messages")).isEqualTo(sent); // the MODEL view: the same blob
+		Map<String, Object> got = firstMedia(events().get(2), "generations");
 		assertThat(got).containsEntry("type", "image/png").containsEntry("size", 1200);
 		assertThat(got.get("blobId")).isNotEqualTo(sent.get("blobId"));
-		assertThat(firstMedia(this.events.get(3), "generations")).isEqualTo(got); // the CLIENT view: the same blob
+		assertThat(firstMedia(events().get(3), "generations")).isEqualTo(got); // the CLIENT view: the same blob
 		assertThat(uploads).containsExactlyInAnyOrder(sent.get("blobId") + " image/png 800", got.get("blobId") + " image/png 1200");
 	}
 
@@ -114,7 +120,7 @@ class InspectorAdvisorTest {
 			.content();
 		uploading.awaitBackground();
 
-		assertThat(firstMedia(this.events.get(0), "messages")).containsEntry("type", "image/png")
+		assertThat(firstMedia(events().get(0), "messages")).containsEntry("type", "image/png")
 			.containsEntry("size", 800)
 			.doesNotContainKey("blobId");
 		assertThat(uploads).isEmpty();
@@ -142,7 +148,7 @@ class InspectorAdvisorTest {
 			.call()
 			.content();
 
-		Map<String, Object> context = (Map<String, Object>) this.events.get(0).get("context");
+		Map<String, Object> context = (Map<String, Object>) events().get(0).get("context");
 		assertThat(context).containsEntry("tenant", "acme")
 			.containsEntry("apiKey", "…redacted")
 			.containsEntry("access_token", "…redacted")
@@ -162,7 +168,7 @@ class InspectorAdvisorTest {
 			.content();
 
 		@SuppressWarnings("unchecked")
-		List<Map<String, Object>> generations = (List<Map<String, Object>>) this.events.get(1).get("generations");
+		List<Map<String, Object>> generations = (List<Map<String, Object>>) events().get(1).get("generations");
 		assertThat(generations).extracting(g -> g.get("thinking")).containsExactly("signed", null);
 	}
 
@@ -170,7 +176,7 @@ class InspectorAdvisorTest {
 	void theCallIdIsVisibleToCodeRunningInsideTheCall() {
 		chatClient().prompt("hi").call().content();
 
-		assertThat(this.callIdSeenByModel.get()).isEqualTo(this.events.get(0).get("callId"));
+		assertThat(this.callIdSeenByModel.get()).isEqualTo(events().get(0).get("callId"));
 		assertThat(InspectorCorrelation.currentCallId()).isNull();
 	}
 
@@ -195,7 +201,7 @@ class InspectorAdvisorTest {
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
 
-		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		List<Map<String, Object>> requests = events().stream().filter(e -> "client-request".equals(e.get("type"))).toList();
 		assertThat(requests).extracting(r -> r.get("parentToolId")).containsExactly(null, "task-1", null);
 		assertThat(requests.get(1).get("parentId")).isEqualTo(requests.get(0).get("callId"));
 		assertThat(requests.get(2).get("parentId")).isEqualTo(requests.get(1).get("callId"));
@@ -222,7 +228,7 @@ class InspectorAdvisorTest {
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
 
-		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		List<Map<String, Object>> requests = events().stream().filter(e -> "client-request".equals(e.get("type"))).toList();
 		assertThat(requests).hasSize(3);
 		assertThat(requests.get(1)).containsEntry("parentId", requests.get(0).get("callId")).containsEntry("parentToolId", "task-1");
 		assertThat(requests.get(2)).containsEntry("parentId", requests.get(0).get("callId")).containsEntry("parentToolId", "task-1");
@@ -239,12 +245,12 @@ class InspectorAdvisorTest {
 			return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
 		}).defaultAdvisors(new InspectorAdvisor(this.client, Phase.CLIENT)).build().prompt("hi").call().content();
 
-		List<Map<String, Object>> requests = this.events.stream().filter(e -> "client-request".equals(e.get("type"))).toList();
+		List<Map<String, Object>> requests = events().stream().filter(e -> "client-request".equals(e.get("type"))).toList();
 		assertThat(requests).hasSize(2);
 		assertThat(requests.get(1).get("parentId")).isNull();
 		assertThat(this.callIdSeenByModel.get()).isNull();
 		// The MODEL phase still finds its call through the advisor context.
-		Map<String, Object> modelRequest = this.events.stream().filter(e -> "model-request".equals(e.get("type"))).findFirst().orElseThrow();
+		Map<String, Object> modelRequest = events().stream().filter(e -> "model-request".equals(e.get("type"))).findFirst().orElseThrow();
 		assertThat(modelRequest.get("parentId")).isEqualTo(requests.get(1).get("callId"));
 	}
 
@@ -261,7 +267,7 @@ class InspectorAdvisorTest {
 
 		assertThat(answer).isEqualTo("hello");
 		// Events that would carry the hostile context value are dropped, nothing else.
-		assertThat(this.events).noneMatch(e -> String.valueOf(e.get("context")).contains("hostile"));
+		assertThat(events()).noneMatch(e -> String.valueOf(e.get("context")).contains("hostile"));
 	}
 
 }

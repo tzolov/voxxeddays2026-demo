@@ -110,8 +110,8 @@ classDiagram
     }
     class InspectorClient {
         +send(type, payload)
-        +sendAsync(type, payload)
         +sendLater(type, payload)
+        +sendBlob(bytes, type)
     }
 
     EnvironmentPostProcessor <|.. InspectorEnvironmentPostProcessor
@@ -265,9 +265,10 @@ path tells the server which app made the call.
 
 The server links each wire call to the ChatClient call and model call named by the request's
 `X-Inspector-Call` / `X-Inspector-Model-Call` headers (see [Correlation](#3-chatclient-advisors)). Without them it
-uses the calls open for that run, which works because the advisors post their events **synchronously** (about 1
-ms on localhost): the `model-request` event has reached the server before the model's HTTP request reaches the
-proxy. Synchronous posting also keeps the events in their real order in the UI.
+falls back to the calls open for that run when the request arrives, which is a guess: the starter posts its
+events in the background, so the `model-request` event may reach the server a moment after the model's HTTP
+request reaches the proxy. The UI orders events by the time they were recorded, not by arrival, so a call is
+always drawn before the wire traffic it caused.
 
 Models that make no HTTP calls, such as jinfer running in the JVM, and providers that aren't routed are still
 shown. Their round-trips come from the `MODEL` advisor's events instead.
@@ -338,7 +339,8 @@ stream advisors on other threads, the starter switches on Reactor's automatic co
 Reactor auto-configuration does in a WebFlux app: it sets `spring.reactor.context-propagation=auto` unless
 the app set the property (or `spring.ai.inspector.reactor-context-propagation=false`), and enables the hook
 itself when the property says `auto`, since Spring MVC apps don't have that auto-configuration. The
-completion and error callbacks run on Reactor threads, so they post with `sendAsync` and never block.
+completion and error callbacks run on Reactor threads; like every event, theirs are posted from the client's
+background thread, so they never block.
 
 ### 4. Tool-calling observations
 
@@ -501,9 +503,13 @@ its type; the whole contract is in [EVENTS.md](../EVENTS.md).
 
 | Method | Builds the event on | Posts on | Used for |
 |---|---|---|---|
-| `send` | the caller | the caller, synchronously | advisor, tool, vector store and embedding events: the server sees them in their real order relative to the wire |
-| `sendAsync` | the caller | one background thread, in order | Reactor callbacks that must not block (streaming) |
+| `send` | the caller | one background thread, in order | every event: the caller only builds the payload and never waits for the inspector |
 | `sendLater` | the background thread | the background thread | costly payloads such as MCP messages; the timestamp is still taken at the call |
+
+Events leave the JVM in the order they were built, from one daemon thread; media uploads go through the same
+thread, so an event naming a blob follows it. A stalled inspector costs the application nothing but the
+queue (events are dropped after a failed post, see below). At shutdown the client waits up to ten seconds for
+what is queued, so a short-lived application still posts its last answer and its `run-end`.
 
 Payloads are `Supplier`s, built inside a guard. An exception or `LinkageError` drops the event. After a failed
 post, publishing pauses for 5 seconds, so a stopped inspector costs at most one short timeout per pause. A

@@ -22,10 +22,10 @@ import org.springframework.ai.util.JsonHelper;
  * <li>Events are built lazily inside a guard: a failure while building one (an odd
  * message, a throwing {@code toString()}) drops that event, never the application's
  * call.</li>
- * <li>{@link #send} is synchronous (localhost, ~1ms) so the inspector sees advisor events
- * and wire calls in their real order. {@link #sendAsync} posts from one background thread,
- * in order, for callers that must not block (e.g. Reactor threads); {@link #sendLater}
- * also builds the event there, for payloads too costly to build on such a thread.</li>
+ * <li>{@link #send} builds the event on the caller's thread and posts it from one background
+ * thread, in order, so the caller (an advisor, a tool, a Reactor callback) never waits for the
+ * inspector; {@link #sendLater} also builds the event there, for payloads too costly to build
+ * on the calling thread. The UI orders by the events' timestamps, not by arrival.</li>
  * <li>After a failed post, publishing pauses for {@link #BACKOFF} and then resumes, so a
  * stopped inspector costs at most one short timeout per pause and a restarted one is
  * picked up again. A restarted inspector has forgotten the run, so the run's
@@ -46,15 +46,6 @@ public class InspectorClient {
 	});
 
 	private final JsonHelper json = new JsonHelper();
-
-	/**
-	 * Uploads handed to the background thread and not done yet. An event posted meanwhile
-	 * queues behind them (it may name one of them), so the inspector never gets an event
-	 * before the media it points to. Other background work (an async event) doesn't hold
-	 * events back: a synchronous event must reach the inspector before the HTTP call it
-	 * describes gets to the proxy, and uploads only happen for providers that aren't proxied.
-	 */
-	private final java.util.concurrent.atomic.AtomicInteger uploading = new java.util.concurrent.atomic.AtomicInteger();
 
 	/**
 	 * Media uploaded so far, by the identity of its data, so the image in a message is uploaded once
@@ -131,17 +122,16 @@ public class InspectorClient {
 		this.blobTransport = blobs;
 	}
 
-	/** Builds and posts an event on the calling thread. Never throws. */
+	/**
+	 * Builds the event now, on the calling thread (so it describes the moment, and the
+	 * timestamp is the moment's), and posts it from the background thread, after everything
+	 * handed to that thread before: earlier events and the uploads they name. The caller never
+	 * waits for the inspector. Never throws.
+	 */
 	public void send(String type, Supplier<Map<String, Object>> payload) {
 		String body = build(type, payload);
-		if (body == null) {
-			return;
-		}
-		if (this.uploading.get() > 0) {
+		if (body != null) {
 			background(() -> deliver(body));
-		}
-		else {
-			deliver(body);
 		}
 	}
 
@@ -152,14 +142,6 @@ public class InspectorClient {
 		}
 		catch (java.util.concurrent.RejectedExecutionException ex) {
 			// shut down: the application is stopping, the event or upload is lost with it
-		}
-	}
-
-	/** Like {@link #send(String, Supplier)}, but posts from a background thread, in order. */
-	public void sendAsync(String type, Supplier<Map<String, Object>> payload) {
-		String body = build(type, payload);
-		if (body != null) {
-			background(() -> deliver(body));
 		}
 	}
 
@@ -175,9 +157,9 @@ public class InspectorClient {
 	}
 
 	/**
-	 * Like {@link #sendAsync}, but also builds the event on the background thread, for
-	 * payloads that are costly to build (e.g. serializing a large MCP message). The
-	 * timestamp is still taken now; the payload must not depend on the calling thread.
+	 * Like {@link #send}, but also builds the event on the background thread, for payloads
+	 * that are costly to build (e.g. serializing a large MCP message). The timestamp is still
+	 * taken now; the payload must not depend on the calling thread.
 	 */
 	public void sendLater(String type, Supplier<Map<String, Object>> payload) {
 		long ts = System.currentTimeMillis();
@@ -241,9 +223,9 @@ public class InspectorClient {
 	 * Reports the media of a model call made in the JVM (an image generated, speech
 	 * synthesized), so the inspector can show it. Returns at once with the id the event
 	 * should name and the type (the given one, or sniffed from the bytes); the bytes go to
-	 * the inspector from the background thread, ahead of any event posted afterwards with
-	 * {@link #sendAsync}, so an event posted that way never names a blob that hasn't arrived.
-	 * Null when the media isn't reported (empty, too large, publishing paused).
+	 * the inspector from the background thread, ahead of any event posted afterwards, so an
+	 * event never names a blob that hasn't arrived. Null when the media isn't reported (empty,
+	 * too large, publishing paused).
 	 */
 	public Media sendBlob(byte[] bytes, String contentType) {
 		if (bytes == null || bytes.length == 0 || bytes.length > InspectorMedia.MAX_BYTES
@@ -252,36 +234,20 @@ public class InspectorClient {
 		}
 		String type = InspectorMedia.type(contentType, bytes);
 		String id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-		this.uploading.incrementAndGet();
-		boolean handed = false;
-		try {
-			this.asyncSender.execute(() -> {
-				try {
-					if (System.currentTimeMillis() < this.pausedUntil) {
-						return;
-					}
-					this.blobTransport.upload(id, bytes, type);
-				}
-				catch (RuntimeException ex) {
-					this.down = true;
-					this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
-					System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
-							+ BACKOFF.toSeconds() + "s");
-				}
-				finally {
-					this.uploading.decrementAndGet();
-				}
-			});
-			handed = true;
-		}
-		catch (java.util.concurrent.RejectedExecutionException ex) {
-			return null; // shut down
-		}
-		finally {
-			if (!handed) {
-				this.uploading.decrementAndGet();
+		background(() -> {
+			if (System.currentTimeMillis() < this.pausedUntil) {
+				return;
 			}
-		}
+			try {
+				this.blobTransport.upload(id, bytes, type);
+			}
+			catch (RuntimeException ex) {
+				this.down = true;
+				this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
+				System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
+						+ BACKOFF.toSeconds() + "s");
+			}
+		});
 		return new Media(id, type, bytes.length);
 	}
 
