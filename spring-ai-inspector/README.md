@@ -29,13 +29,14 @@ connection in the **MCP connections** panel, with the server's name, version, pr
 
 ## Images, speech, transcription and moderation
 
-Non-chat calls that go through the proxy get a view of their own, recognized by the API's path whoever serves
-it: **image generation** (`/v1/images/generations`, `/edits`, `/variations`: the prompt and parameters, the
+Non-chat calls that go through the proxy get a view of their own (24, 25), recognized by the API's path whoever
+serves it: **image generation** (`/v1/images/generations`, `/edits`, `/variations`: the prompt and parameters, the
 images, the revised prompt, the usage), **text to speech** (`/v1/audio/speech`: the text and voice, the audio
 with a player), **transcription** (`/v1/audio/transcriptions`, `/translations`: the uploaded file, the
 transcript, language and duration) and **moderation** (`/v1/moderations`: each input with its verdict and
-top category scores). Images and audio sent inline in chat messages (vision, audio input) are shown in the
-message too.
+top category scores). Images, PDFs and audio sent inline in chat messages (vision, audio input: 23, 26) are
+shown in the message too, and so are a chat model's audio answer (`gpt-audio`, 26) and an image a Responses
+call made with the hosted image tool.
 
 The same views show the calls of `ImageModel`, `TextToSpeechModel`, `TranscriptionModel` and `ModerationModel`
 beans that make no HTTP round-trip the proxy sees (a model in the JVM, Google GenAI or Bedrock through their

@@ -1149,3 +1149,20 @@ test('a model bean call (no HTTP) is shown like its HTTP twin, and not twice for
 		seq: 4, ts: 1100, durationMs: 5, request: { params: { model: 'x' }, inputs: [{ type: 'text', text: 'hi' }] }, error: 'IllegalStateException: no key' });
 	assert.match(renderCall(run.calls.get('c1'), true), /IllegalStateException: no key/);
 });
+
+test('audio out of a chat completion is a playable clip with its transcript; a Responses image tool result is an image', () => {
+	const chat = wireOf('openai', '/v1/chat/completions', { body: JSON.stringify({ model: 'gpt-audio-1.5', modalities: ['text', 'audio'], messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: '<base64 90000 chars audio/wav blob:1234123412341234>', format: 'wav' } }] }] }) },
+		{ body: JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: null, audio: { id: 'audio_1', data: '<base64 120000 chars audio/wav blob:abcdabcdabcdabcd>', transcript: 'Brussels is the capital of Belgium.' } } }], usage: { prompt_tokens: 40, completion_tokens: 60 } }) });
+	const resp = normResponse(chat);
+	assert.equal(resp.blocks.find((b) => b.type === 'text').text, 'Brussels is the capital of Belgium.');
+	assert.equal(resp.blocks.find((b) => b.type === 'media').media.blobId, 'abcdabcdabcdabcd');
+	const html = renderWire(chat);
+	assert.match(html, /<audio class="media"[^>]*api\/blobs\/abcdabcdabcdabcd/);
+	assert.match(html, /<audio class="media"[^>]*api\/blobs\/1234123412341234/); // the question, in the request
+	const responses = wireOf('openai', '/v1/responses', { body: JSON.stringify({ model: 'gpt-5-mini', input: 'draw a cat', tools: [{ type: 'image_generation' }] }) },
+		{ body: JSON.stringify({ status: 'completed', output: [{ type: 'image_generation_call', id: 'ig_1', status: 'completed', revised_prompt: 'A tabby cat', result: '<base64 400000 chars image/png blob:feedfeedfeedfeed>' }, { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Here is your cat.' }] }], usage: { input_tokens: 10, output_tokens: 20 } }) });
+	const out = normResponse(responses);
+	assert.equal(out.blocks.find((b) => b.type === 'media').media.blobId, 'feedfeedfeedfeed');
+	assert.match(renderWire(responses), /<img class="media" src="api\/blobs\/feedfeedfeedfeed"/);
+	assert.match(renderWire(responses), /A tabby cat/);
+});

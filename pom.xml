@@ -59,6 +59,10 @@
 		<module>20-memory-session</module>
 		<module>21-guardrails-ontology-checker</module>
 		<module>22-bank-support-agent</module>
+		<module>23-vision-chat</module>
+		<module>24-image-generation</module>
+		<module>25-speech-and-transcription</module>
+		<module>26-audio-chat</module>
 
 	</modules>
 

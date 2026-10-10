@@ -140,6 +140,41 @@ class ProxyControllerTest {
 	}
 
 	@Test
+	void forwardsAMultipartUploadIntactAndRecordsItsFieldsAndFile() throws Exception {
+		// e.g. a transcription: the body must reach the provider as sent, not parsed into parts by the servlet stack.
+		this.store.add(new java.util.HashMap<>(Map.of("type", "run-start", "runId", "run6", "upstreams",
+				Map.of("openai", upstreamUrl()))));
+		AtomicReference<byte[]> received = new AtomicReference<>();
+		this.upstream.createContext("/gateway/v1/audio/transcriptions", exchange -> {
+			received.set(exchange.getRequestBody().readAllBytes());
+			byte[] body = "{\"text\":\"hello\"}".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		String boundary = "----inspector";
+		byte[] audio = { 'R', 'I', 'F', 'F', 1, 2, 3, 4, 'W', 'A', 'V', 'E', 9, 9 };
+		byte[] head = ("--" + boundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--" + boundary
+				+ "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"q.wav\"\r\nContent-Type: audio/wav\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
+		byte[] tail = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.ISO_8859_1);
+		byte[] body = new byte[head.length + audio.length + tail.length];
+		System.arraycopy(head, 0, body, 0, head.length);
+		System.arraycopy(audio, 0, body, head.length, audio.length);
+		System.arraycopy(tail, 0, body, head.length + audio.length, tail.length);
+
+		HttpResponse<String> response = this.http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/r/run6/openai/v1/audio/transcriptions"))
+			.header("Content-Type", "multipart/form-data; boundary=" + boundary)
+			.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofString());
+
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(received.get()).isEqualTo(body);
+		Map<String, Object> wireRequest = events("wire-request").get(0);
+		assertThat(wireRequest).containsEntry("bodyKind", "multipart");
+		assertThat(wireRequest.get("body").toString()).contains("\"model\":\"whisper-1\"").contains("\"filename\":\"q.wav\"");
+	}
+
+	@Test
 	void theStarterCanUploadMediaForModelsThatDontGoThroughTheProxy() throws Exception {
 		byte[] png = { (byte) 0x89, 'P', 'N', 'G', 1 };
 		// Under its own id, typed from the bytes when it says octet-stream.

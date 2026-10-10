@@ -140,9 +140,13 @@ export const ADAPTERS = {
 				}
 			}
 			const u = usage || {};
+			// Audio out (modalities: ["text", "audio"]): the clip (kept by the inspector) and its transcript.
+			const audio = choice.audio && (choice.audio.data || choice.audio.transcript)
+				? [...(choice.audio.transcript ? [{ type: 'text', text: choice.audio.transcript }] : []),
+					{ type: 'media', label: 'audio' + (choice.audio.id ? ' · ' + choice.audio.id : ''), media: mediaOf(choice.audio.data, 'audio/wav') }] : [];
 			return { stop: choice.finish_reason,
 				blocks: [...(choice.reasoning_content ? [{ type: 'thinking', text: choice.reasoning_content }] : []),
-					...(choice.content ? openAiParts(choice.content) : []),
+					...(choice.content ? openAiParts(choice.content) : []), ...audio,
 					...(choice.refusal ? [{ type: 'text', text: '⛔ refusal: ' + choice.refusal }] : []), ...openAiToolCalls(choice.tool_calls)],
 				usage: { input: u.prompt_tokens, output: u.completion_tokens,
 					cacheRead: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens,
@@ -203,6 +207,8 @@ const responsesItem = (it, names = {}) => {
 		case 'function_call_output': case 'custom_tool_call_output':
 			return [{ type: 'tool_result', id: it.call_id, name: names[it.call_id],
 				content: typeof it.output === 'string' ? it.output : responsesText(it.output).map((p) => p.text ?? p.label).join('\n') }];
+		case 'image_generation_call': // the hosted image tool: its result is the image (kept by the inspector)
+			return [{ type: 'media', label: 'image_generation_call' + (it.revised_prompt ? ' · ' + it.revised_prompt : ''), media: mediaOf(it.result) }];
 		case 'reasoning': {
 			const text = [...(it.summary || []), ...(it.content || [])].map((s) => s.text ?? '').join('\n');
 			// Unless a summary was asked for, only the item (or its encrypted form) comes back.
