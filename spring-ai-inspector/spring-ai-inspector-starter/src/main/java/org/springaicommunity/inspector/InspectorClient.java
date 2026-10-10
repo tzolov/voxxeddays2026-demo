@@ -39,9 +39,13 @@ public class InspectorClient {
 
 	private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(500)).build();
 
+	/** The background thread, so work already running on it can tell (see {@link #sendBlob}). */
+	private volatile Thread senderThread;
+
 	private final ExecutorService asyncSender = Executors.newSingleThreadExecutor(r -> {
 		Thread thread = new Thread(r, "spring-ai-inspector-sender");
 		thread.setDaemon(true);
+		this.senderThread = thread;
 		return thread;
 	});
 
@@ -234,21 +238,28 @@ public class InspectorClient {
 		}
 		String type = InspectorMedia.type(contentType, bytes);
 		String id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-		background(() -> {
-			if (System.currentTimeMillis() < this.pausedUntil) {
-				return;
-			}
-			try {
-				this.blobTransport.upload(id, bytes, type);
-			}
-			catch (RuntimeException ex) {
-				this.down = true;
-				this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
-				System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
-						+ BACKOFF.toSeconds() + "s");
-			}
-		});
+		if (Thread.currentThread() == this.senderThread) {
+			upload(id, bytes, type); // called while building an event there (sendLater): before that event goes
+		}
+		else {
+			background(() -> upload(id, bytes, type));
+		}
 		return new Media(id, type, bytes.length);
+	}
+
+	private void upload(String id, byte[] bytes, String type) {
+		if (System.currentTimeMillis() < this.pausedUntil) {
+			return;
+		}
+		try {
+			this.blobTransport.upload(id, bytes, type);
+		}
+		catch (RuntimeException ex) {
+			this.down = true;
+			this.pausedUntil = System.currentTimeMillis() + BACKOFF.toMillis();
+			System.err.println("Spring AI Inspector unreachable (" + ex.getMessage() + "), pausing events for "
+					+ BACKOFF.toSeconds() + "s");
+		}
 	}
 
 	/** The media already uploaded under this key, if any (see {@link #sendBlob(Object, byte[], String)}). */

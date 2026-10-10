@@ -59,7 +59,7 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	static final String PROXY_PREFIX = "spring.ai.inspector.proxy.";
 
 	/**
-	 * e.g. spring.ai.anthropic.chat.options.model, spring.ai.jinfer.chat.model, or the model of
+	 * e.g. spring.ai.anthropic.chat.model, spring.ai.jinfer.chat.model, or the model of
 	 * OpenAI's Responses API: spring.ai.openai.responses.model
 	 */
 	private static final Pattern CHAT_MODEL = Pattern
@@ -320,11 +320,11 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 
 	/**
 	 * The configured chat models, of any provider: {@code spring.ai.<provider>.chat.model} or
-	 * {@code spring.ai.<provider>.chat.options.model} (e.g. jinfer's in-JVM models too), and
+	 * {@code spring.ai.<provider>.chat.model} (e.g. jinfer's in-JVM models too), and
 	 * {@code spring.ai.<provider>.responses.model} (OpenAI's Responses API).
 	 */
 	static String models(ConfigurableEnvironment environment) {
-		// Per provider: chat.options.model wins over chat.model, as Spring AI resolves it. A Responses
+		// Per provider: chat.options.model (the older spelling) wins over chat.model, as Spring AI resolves it. A Responses
 		// API model is listed on its own.
 		Map<String, String> models = new LinkedHashMap<>();
 		for (String key : propertyNames(environment)) {
@@ -348,7 +348,7 @@ public class InspectorEnvironmentPostProcessor implements EnvironmentPostProcess
 	/**
 	 * The names of all enumerable properties, in property source order. Environment
 	 * variables are named as properties too (SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL ->
-	 * spring.ai.openai.chat.options.model), which the environment resolves by relaxed
+	 * spring.ai.openai.chat.model), which the environment resolves by relaxed
 	 * binding. A source that can't list its names (e.g. a composite one wrapping a
 	 * non-enumerable source) is skipped: inspection must never stop the application.
 	 */

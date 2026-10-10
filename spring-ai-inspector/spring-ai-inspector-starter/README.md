@@ -399,10 +399,10 @@ Spring AI has its own vector store observations, but they fire only when the sto
   call (the prompt and parameters of an image, the text and voice of speech, the file of a transcription,
   the inputs of a moderation; the images, audio, transcript or verdicts that came back), so the UI shows a
   model in the JVM or behind an SDK (Google GenAI, Bedrock) exactly like a proxied one, marked "no HTTP".
-- The media of the call is uploaded to the inspector from the background thread (`PUT /api/blobs/<id>`, up
-  to 16 MB an item, under an id the starter mints and puts in the event; the event follows the media on the
-  same thread, and an event posted from the application thread while an upload is pending queues behind it
-  too), so an image generated in the JVM is shown and synthesized speech can be played. The type is
+- The event is built on the background thread (`sendLater`): describing the call reads the audio file again
+  (transcription) and decodes images, which the application's thread doesn't pay for. The media is uploaded
+  from there too (`PUT /api/blobs/<id>`, up to 16 MB an item, under an id the starter mints and puts in the
+  event), ahead of the event, so an image generated in the JVM is shown and synthesized speech can be played. The type is
   the format's, or sniffed from the bytes. An audio input is read for the preview only when it can be read
   again (a file, a byte array, a class path resource); a stream or a URL is left to the model and described
   by name and size.
@@ -410,8 +410,9 @@ Spring AI has its own vector store observations, but they fire only when the sto
   bean's call when an HTTP round-trip of the same kind was recorded for the same call meanwhile.
 - A streamed speech or transcription call (`stream`) is reported once, when the stream completes, with the
   chunks put together (the audio bytes, the text) and marked `streamed`; the stream reaches the app untouched.
-  The interface's convenience methods (`call(String)`, `stream(String)`, `transcribe`, `streamTranscribe`) call
-  the prompt method on the bean itself, past the proxy, so only calls made with a prompt are seen.
+  The interfaces' convenience methods (`call(String)`, `stream(String)`, `transcribe`, `streamTranscribe`) are
+  reported too, once: they call the prompt method on the bean itself (past an interface proxy, through a
+  subclass proxy again), so the report is made from the convenience method and the nested call is skipped.
 
 ### 6. MCP client transports
 

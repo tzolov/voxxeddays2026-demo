@@ -137,6 +137,53 @@ class InspectorModelPostProcessorTest {
 	}
 
 	@Test
+	void theConvenienceMethodsAreReportedOnceThroughEitherKindOfProxy() {
+		TextToSpeechModel cglib = wrap(new FakeSpeechModel()); // a subclass proxy: the nested prompt call goes through it again
+		byte[] heard = cglib.call("Welcome");
+		assertThat(heard).containsExactly(1, 2, 3);
+		Map<String, Object> event = event();
+		assertThat(map(event.get("request"))).containsEntry("text", "Welcome");
+		assertThat(map(map(event.get("response")).get("audio"))).containsEntry("size", 3);
+		this.events.clear();
+
+		TextToSpeechModel jdk = wrap(new FinalSpeechModel()); // an interface proxy: the nested prompt call bypasses it
+		assertThat(jdk.getClass().getSimpleName()).startsWith("$Proxy");
+		jdk.call("Hi");
+		assertThat(map(event().get("request"))).containsEntry("text", "Hi");
+		this.events.clear();
+
+		TranscriptionModel transcriber = wrap(new FakeTranscriptionModel());
+		assertThat(transcriber.transcribe(new ByteArrayResource(new byte[] { 1 }))).isEqualTo("What is the weather?");
+		assertThat(map(event().get("response"))).containsEntry("text", "What is the weather?");
+		this.events.clear();
+
+		String streamed = transcriber.streamTranscribe(new ByteArrayResource(new byte[] { 1 })).reduce("", String::concat).block();
+		assertThat(streamed).isEqualTo("What is the weather?");
+		assertThat(event()).containsEntry("streamed", true);
+		assertThat(map(event().get("response"))).containsEntry("text", "What is the weather?");
+	}
+
+	@Test
+	void theAudioFileIsReadForTheUploadOffTheApplicationThread() {
+		TranscriptionModel model = wrap(new FakeTranscriptionModel());
+		List<String> readers = new CopyOnWriteArrayList<>();
+		ByteArrayResource audio = new ByteArrayResource("RIFF....WAVE....".getBytes(StandardCharsets.US_ASCII)) {
+			@Override
+			public java.io.InputStream getInputStream() throws java.io.IOException {
+				readers.add(Thread.currentThread().getName());
+				return super.getInputStream();
+			}
+		};
+
+		model.call(new AudioTranscriptionPrompt(audio, () -> "whisper-1"));
+
+		List<Map<String, Object>> files = (List<Map<String, Object>>) map(event().get("request")).get("files");
+		assertThat(files.get(0)).containsKey("blobId");
+		assertThat(readers).containsExactly(Thread.currentThread().getName(), "spring-ai-inspector-sender"); // the model, then the inspector
+		assertThat(this.uploads).hasSize(1);
+	}
+
+	@Test
 	void aStreamedSpeechCallIsReportedOnceWithTheChunksPutTogether() {
 		TextToSpeechModel model = wrap(new FakeSpeechModel());
 
@@ -273,6 +320,21 @@ class InspectorModelPostProcessorTest {
 		public Flux<TextToSpeechResponse> stream(TextToSpeechPrompt prompt) {
 			return Flux.just(new TextToSpeechResponse(List.of(new Speech(new byte[] { 1, 2, 3 }))),
 					new TextToSpeechResponse(List.of(new Speech(new byte[] { 4, 5 }))));
+		}
+
+	}
+
+	/** Final: Spring's ProxyFactory can only give it an interface (JDK) proxy. */
+	public static final class FinalSpeechModel implements TextToSpeechModel {
+
+		@Override
+		public TextToSpeechResponse call(TextToSpeechPrompt prompt) {
+			return new TextToSpeechResponse(List.of(new Speech(new byte[] { 9 })));
+		}
+
+		@Override
+		public Flux<TextToSpeechResponse> stream(TextToSpeechPrompt prompt) {
+			return Flux.just(call(prompt));
 		}
 
 	}

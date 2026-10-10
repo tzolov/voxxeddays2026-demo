@@ -11,13 +11,16 @@ import java.util.Set;
 import java.util.UUID;
 
 import org.aopalliance.intercept.MethodInterceptor;
+import org.aopalliance.intercept.MethodInvocation;
 
 import org.springframework.ai.audio.transcription.AudioTranscription;
+import org.springframework.ai.audio.transcription.AudioTranscriptionOptions;
 import org.springframework.ai.audio.transcription.AudioTranscriptionPrompt;
 import org.springframework.ai.audio.transcription.AudioTranscriptionResponse;
 import org.springframework.ai.audio.transcription.TranscriptionModel;
 import org.springframework.ai.audio.tts.Speech;
 import org.springframework.ai.audio.tts.TextToSpeechModel;
+import org.springframework.ai.audio.tts.TextToSpeechOptions;
 import org.springframework.ai.audio.tts.TextToSpeechPrompt;
 import org.springframework.ai.audio.tts.TextToSpeechResponse;
 import org.springframework.ai.chat.metadata.Usage;
@@ -100,39 +103,97 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 		factory.addAdvice((MethodInterceptor) invocation -> {
 			Object[] args = invocation.getArguments();
 			String method = invocation.getMethod().getName();
+			if (args.length == 0 || NESTED.get()) {
+				return invocation.proceed(); // a call the convenience method around it reports
+			}
+			// The interfaces' convenience methods (call(String), transcribe(Resource), stream(String),
+			// streamTranscribe) call the prompt method on the bean itself: past a JDK proxy (a final
+			// class), through a CGLIB one again. Reported here, once, from the convenience method.
+			if ("speech".equals(kind) && args[0] instanceof String text && ("call".equals(method) || "stream".equals(method))) {
+				TextToSpeechPrompt prompt = args.length > 1 && args[1] instanceof TextToSpeechOptions o
+						? new TextToSpeechPrompt(text, o) : new TextToSpeechPrompt(text);
+				return "call".equals(method)
+						? nested(() -> reported(kind, provider, prompt, invocation, bytes -> speech((byte[]) bytes)))
+						: nested(() -> streamed(kind, provider, prompt, invocation.proceed(), bytes -> speech((byte[]) bytes)));
+			}
+			if ("transcription".equals(kind) && args[0] instanceof Resource audio
+					&& ("transcribe".equals(method) || "streamTranscribe".equals(method))) {
+				AudioTranscriptionPrompt prompt = args.length > 1 && args[1] instanceof AudioTranscriptionOptions o
+						? new AudioTranscriptionPrompt(audio, o) : new AudioTranscriptionPrompt(audio);
+				return "transcribe".equals(method)
+						? nested(() -> reported(kind, provider, prompt, invocation, text -> transcription((String) text)))
+						: nested(() -> streamed(kind, provider, prompt, invocation.proceed(), text -> transcription((String) text)));
+			}
 			if (args.length != 1 || !isPrompt(args[0])) {
 				return invocation.proceed();
 			}
 			if ("stream".equals(method) && ("speech".equals(kind) || "transcription".equals(kind))) {
-				return streamed(kind, provider, args[0], invocation.proceed());
+				return streamed(kind, provider, args[0], invocation.proceed(), chunk -> chunk);
 			}
 			if (!"call".equals(method)) {
 				return invocation.proceed();
 			}
-			String clientCallId = InspectorCorrelation.currentCallId();
-			long start = System.currentTimeMillis();
-			try {
-				Object result = invocation.proceed();
-				report(kind, provider, args[0], result, null, System.currentTimeMillis() - start, clientCallId, false);
-				return result;
-			}
-			catch (Throwable ex) {
-				report(kind, provider, args[0], null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-						System.currentTimeMillis() - start, clientCallId, false);
-				throw ex;
-			}
+			return reported(kind, provider, args[0], invocation, result -> result);
 		});
 		return factory.getProxy();
 	}
 
+	/** Set while a convenience method runs: the prompt call it makes is not reported again. */
+	private static final ThreadLocal<Boolean> NESTED = ThreadLocal.withInitial(() -> false);
+
+	private interface Call {
+
+		Object run() throws Throwable;
+
+	}
+
+	private static Object nested(Call call) throws Throwable {
+		NESTED.set(true);
+		try {
+			return call.run();
+		}
+		finally {
+			NESTED.set(false);
+		}
+	}
+
+	private static TextToSpeechResponse speech(byte[] bytes) {
+		return new TextToSpeechResponse(List.of(new Speech(bytes == null ? new byte[0] : bytes)));
+	}
+
+	private static AudioTranscriptionResponse transcription(String text) {
+		return new AudioTranscriptionResponse(new AudioTranscription(text == null ? "" : text));
+	}
+
+	/** A blocking call, reported with its result (as the response object {@code asResponse} makes of it) or its error. */
+	private Object reported(String kind, String provider, Object prompt, MethodInvocation invocation,
+			java.util.function.Function<Object, Object> asResponse) throws Throwable {
+		String clientCallId = InspectorCorrelation.currentCallId();
+		long start = System.currentTimeMillis();
+		try {
+			Object result = invocation.proceed();
+			report(kind, provider, prompt, result == null ? null : asResponse.apply(result), null,
+					System.currentTimeMillis() - start, clientCallId, false);
+			return result;
+		}
+		catch (Throwable ex) {
+			report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
+					System.currentTimeMillis() - start, clientCallId, false);
+			throw ex;
+		}
+	}
+
 	/**
-	 * A streamed speech or transcription call: the chunks are put together as they pass (the
-	 * audio bytes, the text) and the whole is reported once the stream completes, as one
-	 * call marked {@code streamed}, so it is shown like a blocking one. The stream itself is
-	 * handed to the application untouched; a failure to describe it never fails it.
+	 * A streamed speech or transcription call: the chunks (each made a response object by
+	 * {@code asResponse}: a prompt stream's responses as they are, a convenience method's raw
+	 * bytes or text wrapped) are put together as they pass and the whole is reported once the
+	 * stream completes, as one call marked {@code streamed}, so it is shown like a blocking one.
+	 * The stream itself is handed to the application untouched; a failure to describe it never
+	 * fails it.
 	 */
 	@SuppressWarnings("unchecked")
-	private Object streamed(String kind, String provider, Object prompt, Object result) {
+	private Object streamed(String kind, String provider, Object prompt, Object result,
+			java.util.function.Function<Object, Object> asResponse) {
 		if (!(result instanceof Flux<?> flux)) {
 			return result;
 		}
@@ -142,8 +203,9 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 			java.io.ByteArrayOutputStream audio = new java.io.ByteArrayOutputStream();
 			StringBuilder text = new StringBuilder();
 			long start = System.currentTimeMillis();
-			return ((Flux<Object>) flux).doOnNext(chunk -> {
+			return ((Flux<Object>) flux).doOnNext(item -> {
 				try {
+					Object chunk = asResponse.apply(item);
 					if (chunk instanceof TextToSpeechResponse speech && speech.getResult() != null && speech.getResult().getOutput() != null) {
 						audio.write(speech.getResult().getOutput());
 					}
@@ -156,8 +218,7 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 					// never break the stream for the inspector's sake
 				}
 			}).doOnComplete(() -> {
-				Object whole = "speech".equals(kind) ? new TextToSpeechResponse(List.of(new Speech(audio.toByteArray())))
-						: new AudioTranscriptionResponse(new AudioTranscription(text.toString()));
+				Object whole = "speech".equals(kind) ? speech(audio.toByteArray()) : transcription(text.toString());
 				report(kind, provider, prompt, whole, null, System.currentTimeMillis() - start, clientCallId, true);
 			}).doOnError(ex -> report(kind, provider, prompt, null, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
 					System.currentTimeMillis() - start, clientCallId, true));
@@ -213,15 +274,18 @@ public class InspectorModelPostProcessor implements BeanPostProcessor {
 		if (c == null) {
 			return;
 		}
-		// Built here, so the media is handed to the background thread first; posted from there.
-		c.send("model-call", () -> {
+		// Built on the background thread: describing the call reads the audio file again (transcription)
+		// and decodes images, which the application's thread shouldn't pay for; the media is uploaded from
+		// there too, ahead of the event. The caller's thread is named as it was.
+		String thread = Thread.currentThread().getName();
+		c.sendLater("model-call", () -> {
 			Map<String, Object> event = new LinkedHashMap<>();
 			event.put("modelCallId", UUID.randomUUID().toString().substring(0, 8));
 			event.put("clientCallId", clientCallId);
 			event.put("kind", kind);
 			event.put("modelType", modelType(kind));
 			event.put("provider", provider);
-			event.put("thread", Thread.currentThread().getName());
+			event.put("thread", thread);
 			if (streamed) {
 				event.put("streamed", true);
 			}

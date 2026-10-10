@@ -118,19 +118,19 @@ Update `pom.xml` and `application.properties` to use different providers:
 **Anthropic Claude** (default):
 ```properties
 spring.ai.anthropic.api-key=${ANTHROPIC_API_KEY}
-spring.ai.anthropic.chat.options.model=claude-sonnet-4-5-20250929
+spring.ai.anthropic.chat.model=claude-sonnet-4-5-20250929
 ```
 
 **OpenAI**:
 ```properties
 spring.ai.openai.api-key=${OPENAI_API_KEY}
-spring.ai.openai.chat.options.model=gpt-5-mini-2025-08-07
+spring.ai.openai.chat.model=gpt-5-mini-2025-08-07
 ```
 
 **Google Gemini**:
 ```properties
 spring.ai.google.genai.project-id=${GOOGLE_CLOUD_PROJECT}
-spring.ai.google.genai.chat.options.model=gemini-3.1-pro-preview
+spring.ai.google.genai.chat.model=gemini-3.1-pro-preview
 ```
 
 ## Learn More

@@ -223,7 +223,7 @@ class InspectorEnvironmentPostProcessorTest {
 
 		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
 				"spring.ai.jinfer.chat.model", "LiquidAI/LFM2.5-8B-A1B-GGUF:Q8_0",
-				"spring.ai.anthropic.chat.options.model", "claude-sonnet-5-5",
+				"spring.ai.anthropic.chat.model", "claude-sonnet-5-5",
 				"spring.ai.jinfer.embedding.model", "Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0"));
 
 		assertThat(env.getProperty("spring.ai.inspector.models").split(", "))
@@ -258,7 +258,7 @@ class InspectorEnvironmentPostProcessorTest {
 		});
 		env.getPropertySources().addFirst(composite);
 		env.getPropertySources().addFirst(new MapPropertySource("app", new HashMap<>(Map.of("spring.ai.inspector.url", url,
-				"spring.ai.anthropic.chat.options.model", "claude-sonnet-5-5"))));
+				"spring.ai.anthropic.chat.model", "claude-sonnet-5-5"))));
 
 		new InspectorEnvironmentPostProcessor().postProcessEnvironment(env, new SpringApplication(Object.class));
 
@@ -295,7 +295,7 @@ class InspectorEnvironmentPostProcessorTest {
 		String url = serve("{\"name\":\"spring-ai-inspector\"}");
 
 		StandardEnvironment env = environment(Map.of("spring.ai.inspector.url", url,
-				"spring.ai.ollama.chat.model", "llama3", "spring.ai.ollama.chat.options.model", "qwen3"));
+				"spring.ai.ollama.chat.model", "llama3", "spring.ai.ollama.chat.options.model", "qwen3")); // the older spelling still wins
 
 		assertThat(env.getProperty("spring.ai.inspector.models")).isEqualTo("qwen3");
 	}

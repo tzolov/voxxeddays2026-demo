@@ -69,6 +69,17 @@ class InspectorClientTest {
 	}
 
 	@Test
+	void aBlobSentWhileAnEventIsBuiltInTheBackgroundGoesOutBeforeThatEvent() {
+		List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+		InspectorClient client = new InspectorClient("run-1", body -> order.add("event"), (id, bytes, type) -> order.add("upload"));
+
+		client.sendLater("model-call", () -> Map.of("blobId", client.sendBlob(new byte[] { 1, 2 }, "image/png").id()));
+		client.awaitBackground();
+
+		assertThat(order).containsExactly("upload", "event");
+	}
+
+	@Test
 	void afterShutdownNothingIsThrownAtTheCaller() {
 		List<String> sent = new ArrayList<>();
 		InspectorClient client = new InspectorClient("run-1", sent::add, (id, bytes, type) -> {
