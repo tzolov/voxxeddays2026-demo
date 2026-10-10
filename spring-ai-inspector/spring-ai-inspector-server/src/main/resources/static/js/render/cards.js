@@ -218,7 +218,24 @@ export function callTokens(call) {
 	return { input, output };
 }
 
+/**
+ * Call cards, cached: a card is built again only when its call changed (`rev`, bumped by model.js
+ * for every event of the call and of the calls nested in it), when it stops being the latest, or
+ * when the user changed a fold, a tab or the highlight (`state.uiVersion`). A long run redraws
+ * one card per event instead of all of them.
+ */
+const cards = new WeakMap(); // call -> { key, html }
+
 export function renderCall(call, isLatest) {
+	const key = `${call.rev || 0}|${isLatest ? 1 : 0}|${state.uiVersion}`;
+	const cached = cards.get(call);
+	if (cached && cached.key === key) return cached.html;
+	const html = renderCallFresh(call, isLatest);
+	cards.set(call, { key, html });
+	return html;
+}
+
+function renderCallFresh(call, isLatest) {
 	const key = 'call:' + call.id;
 	const appMsgs = call.req.messages || [];
 	const lastUser = [...appMsgs].reverse().find((m) => m.role === 'user');

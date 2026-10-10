@@ -1,10 +1,10 @@
 // Entry point: the only module that touches the DOM when it loads. Everything else is
 // importable without a browser (see src/test/js).
 import { exportRun, importFiles } from './io.js';
-import { handle } from './model.js';
+import { affectsSelected, handle } from './model.js';
 import { render, syncSequenceHead } from './render/page.js';
 import { replay, startReplay, stepReplay, stopReplay, togglePause } from './replay.js';
-import { apiHeaders, apiUrl, pref, savePref, state } from './state.js';
+import { apiHeaders, apiUrl, pref, savePref, state, touchUi } from './state.js';
 
 // ---------------------------------------------------------------- deep links
 // #run=<runId>&view=cards|sequence&scale=ordered|scaled selects a run and view, e.g. to
@@ -34,7 +34,7 @@ function selectLinkedRun() {
 // ---------------------------------------------------------------- interaction
 document.addEventListener('toggle', (e) => {
 	const key = e.target.dataset && e.target.dataset.key;
-	if (key) state.open.set(key, e.target.open);
+	if (key) { state.open.set(key, e.target.open); touchUi(); }
 	// A lazy fold renders its content only when open: render it now. Details rendered open also
 	// fire toggle, so only when the content is still missing (just the summary), or it would loop.
 	if (key && e.target.open && 'lazy' in e.target.dataset && e.target.children.length === 1) render();
@@ -49,7 +49,7 @@ document.addEventListener('click', (e) => {
 	if (runBtn) { state.selected = runBtn.dataset.run; updateHash(); window.scrollTo(0, 0); render(); return; }
 	const tabBtn = e.target.closest('[data-tab]');
 	if (tabBtn) {
-		state.tabs.set(tabBtn.dataset.wire, tabBtn.dataset.tab);
+		state.tabs.set(tabBtn.dataset.wire, tabBtn.dataset.tab); touchUi();
 		const wire = tabBtn.closest('.wire');
 		wire.querySelectorAll(':scope > .tabs .tab').forEach((t) => t.classList.toggle('on', t === tabBtn));
 		wire.querySelectorAll(':scope > .pane').forEach((p) => p.classList.toggle('on', p.dataset.pane === tabBtn.dataset.tab));
@@ -110,7 +110,7 @@ document.addEventListener('click', (e) => {
 	const msg = e.target.closest('[data-goto]');
 	if (msg) {
 		const path = JSON.parse(msg.dataset.goto);
-		path.forEach((k) => state.open.set(k, true));
+		path.forEach((k) => state.open.set(k, true)); touchUi();
 		savePref('view', 'cards');
 		render();
 		requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -133,7 +133,7 @@ document.addEventListener('click', (e) => {
 		case 'seq-ordered': savePref('seqScale', 'ordered'); render(); break;
 		case 'seq-scaled': savePref('seqScale', 'scaled'); render(); break;
 		case 'pin-tokens': e.preventDefault(); savePref('pinTokens', String(pref('pinTokens', 'true') !== 'true')); render(); break;
-		case 'hl-model': state.highlight = state.highlight === btn.dataset.model ? null : btn.dataset.model; render(); break;
+		case 'hl-model': state.highlight = state.highlight === btn.dataset.model ? null : btn.dataset.model; touchUi(); render(); break;
 	}
 	if (btn.dataset.action.startsWith('view-') || btn.dataset.action.startsWith('seq-')) updateHash();
 });
@@ -154,7 +154,11 @@ function connect() {
 		dot.classList.add('live');
 		dot.title = 'connected';
 	};
-	source.onmessage = (msg) => { handle(JSON.parse(msg.data)); selectLinkedRun(); render(); };
+	source.onmessage = (msg) => {
+		const ev = JSON.parse(msg.data); const selected = state.selected;
+		handle(ev); selectLinkedRun();
+		render({ main: affectsSelected(ev, selected) });
+	};
 	source.onerror = () => { dot.classList.remove('live'); dot.title = 'reconnecting…'; };
 }
 

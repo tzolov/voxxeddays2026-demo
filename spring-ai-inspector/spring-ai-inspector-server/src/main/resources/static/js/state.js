@@ -6,7 +6,13 @@ export const state = {
 	open: new Map(),   // data-key -> boolean (user toggled <details>)
 	tabs: new Map(),   // wire id -> tab name
 	highlight: null,   // 'provider|model' whose round-trips are outlined (tokens panel)
+	uiVersion: 0,      // bumped by every change above that alters rendered HTML: cached cards are keyed by it
 };
+
+/** Call after changing `open`, `tabs` or `highlight`: the cards rendered before are stale. */
+export function touchUi() {
+	state.uiVersion++;
+}
 
 export function pref(key, fallback) {
 	try { return localStorage.getItem('inspector.' + key) ?? fallback; } catch { return fallback; }

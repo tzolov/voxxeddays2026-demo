@@ -12,12 +12,15 @@ import { esc, fmtMs, fmtNum, fmtTime } from '../util.js';
 // ---------------------------------------------------------------- page rendering
 /** Tokens and round-trips of a run: HTTP ones, and model calls without HTTP (see models.js). */
 export function runTotals(run) {
+	// Summed once per event: the sidebar asks for every run on every event, and a long run has many round-trips.
+	if (run.totals && run.totals.at === run.events.length) return run.totals.value;
 	let input = 0, output = 0;
 	const noHttp = advisorOnlyCalls(run);
 	for (const u of [...run.wireList.map(usageOf), ...noHttp.map(usageOfModelCall)]) {
 		if (u) { input += u.input || 0; output += u.output || 0; }
 	}
-	return { input, output, trips: run.wireList.length + noHttp.length };
+	run.totals = { at: run.events.length, value: { input, output, trips: run.wireList.length + noHttp.length } };
+	return run.totals.value;
 }
 
 export function renderSidebar() {
@@ -110,16 +113,27 @@ export function syncSequenceHead(wrap) {
 }
 
 export let renderPending = false;
-export function render() {
+let mainPending = false;
+
+/**
+ * Redraws on the next frame; calls within a frame are folded into one. With {@code main: false}
+ * only the sidebar is redrawn (an event of a run that isn't shown changes its counts there,
+ * nothing in the main view); a later call in the same frame with {@code main: true} upgrades it.
+ */
+export function render({ main = true } = {}) {
+	mainPending ||= main;
 	if (renderPending) return;
 	renderPending = true;
 	requestAnimationFrame(() => {
 		renderPending = false;
+		const withMain = mainPending;
+		mainPending = false;
+		renderSidebar();
+		if (!withMain) return;
 		const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
 		// The sequence's sideways scroll is kept across live updates of the same run, not into another run.
 		const before = document.querySelector('.seq-view');
 		const scroll = before && { run: before.dataset.run, left: before.querySelector('.seq-wrap').scrollLeft };
-		renderSidebar();
 		renderMain();
 		const view = document.querySelector('.seq-view');
 		if (view && scroll && view.dataset.run === scroll.run) view.querySelector('.seq-wrap').scrollLeft = scroll.left;

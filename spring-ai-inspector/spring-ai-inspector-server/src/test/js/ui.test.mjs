@@ -6,8 +6,8 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { state } from '../../main/resources/static/js/state.js';
-import { EVENTS_VERSION, handle } from '../../main/resources/static/js/model.js';
+import { state, touchUi } from '../../main/resources/static/js/state.js';
+import { EVENTS_VERSION, affectsSelected, handle, touch } from '../../main/resources/static/js/model.js';
 import { ADAPTERS, adapterOf, anthropicBlock, blobMarker, mediaOf, normRequest, normResponse, usageOf } from '../../main/resources/static/js/providers.js';
 import { diffTools, renderCall, renderItems, renderTool } from '../../main/resources/static/js/render/cards.js';
 import { renderMcpPanel } from '../../main/resources/static/js/render/mcp.js';
@@ -804,6 +804,59 @@ test('system prompts fold to a one-line preview and remember being opened', () =
 	state.open.set(folded.match(/data-key="([^"]+)"/)[1], true);
 	assert.match(renderSpringMessage(m, 'added'), /^<details class="msg system added" data-key="sys:\w+" open>/);
 	assert.doesNotMatch(renderSpringMessage({ role: 'user', text: 'hi' }), /<details/);
+});
+
+test('every event of a call marks it and the calls around it as changed, across a remote link too', () => {
+	state.runs.clear();
+	handle({ type: 'run-start', runId: 'a', ts: 1, app: 'caller' });
+	handle({ type: 'client-request', runId: 'a', ts: 2, callId: 'c1', messages: [] });
+	handle({ type: 'tool-start', runId: 'a', ts: 3, toolId: 't1', clientCallId: 'c1', name: 'Task' });
+	const c1 = state.runs.get('a').calls.get('c1');
+	const after = (f) => { const before = c1.rev; f(); return c1.rev - before; };
+	// A wire of the call, a tool's end, a nested call's events: the top call's card changes each time.
+	assert.equal(after(() => handle({ type: 'wire-request', runId: 'a', ts: 4, wireId: 'w1', clientCallId: 'c1', provider: 'openai', path: '/v1/chat/completions', body: '{}' })), 1);
+	assert.equal(after(() => handle({ type: 'wire-response', runId: 'a', ts: 5, wireId: 'w1', status: 200, body: '{}' })), 1);
+	assert.equal(after(() => handle({ type: 'client-request', runId: 'a', ts: 6, callId: 'c2', parentId: 'c1', parentToolId: 't1', messages: [] })), 1);
+	assert.equal(after(() => handle({ type: 'client-response', runId: 'a', ts: 7, callId: 'c2', generations: [] })), 1);
+	// A remote agent's call linked into the tool: its events change the caller's card.
+	assert.equal(after(() => handle({ type: 'client-request', runId: 'b', ts: 8, callId: 'r1', messages: [], linkedFrom: { runId: 'a', toolId: 't1', clientCallId: 'c1' } })), 1);
+	assert.equal(after(() => handle({ type: 'client-response', runId: 'b', ts: 9, callId: 'r1', generations: [] })), 1);
+	// An event of another run that isn't linked: nothing changes here.
+	assert.equal(after(() => handle({ type: 'client-request', runId: 'c', ts: 10, callId: 'x', messages: [] })), 0);
+	assert.equal(after(() => handle({ type: 'tool-end', runId: 'a', ts: 11, toolId: 't1', result: 'ok' })), 1);
+});
+
+test('a live event redraws the main view only when it shows the run, a linked run, or the selection moved', () => {
+	state.runs.clear(); state.follow = false;
+	handle({ type: 'run-start', runId: 'a', ts: 1, app: 'caller' });
+	handle({ type: 'client-request', runId: 'a', ts: 2, callId: 'c1', messages: [] });
+	handle({ type: 'tool-start', runId: 'a', ts: 3, toolId: 't1', clientCallId: 'c1', name: 'Task' });
+	handle({ type: 'client-request', runId: 'b', ts: 4, callId: 'r1', messages: [], linkedFrom: { runId: 'a', toolId: 't1', clientCallId: 'c1' } });
+	handle({ type: 'run-start', runId: 'c', ts: 5, app: 'other' });
+	state.selected = 'a';
+	assert.equal(affectsSelected({ type: 'client-response', runId: 'a', callId: 'c1' }, 'a'), true);
+	assert.equal(affectsSelected({ type: 'client-response', runId: 'b', callId: 'r1' }, 'a'), true); // linked into a
+	assert.equal(affectsSelected({ type: 'client-request', runId: 'c', callId: 'y' }, 'a'), false);
+	assert.equal(affectsSelected({ type: 'clear' }, 'a'), true);
+	state.selected = 'c';
+	assert.equal(affectsSelected({ type: 'run-start', runId: 'c' }, 'a'), true); // the selection moved
+	state.follow = true;
+});
+
+test('a call card is built again only when the call changed or the user changed the view', () => {
+	const run = runOf(load('tools'), '08-tools');
+	const call = topCalls(run)[0];
+	const first = renderCall(call, true);
+	call.resp = { ...call.resp, durationMs: 123456 }; // changed behind the model's back: the cached card is served
+	assert.equal(renderCall(call, true), first);
+	touch(call);
+	assert.notEqual(renderCall(call, true), first);
+	assert.match(renderCall(call, true), /123/);
+	const latest = renderCall(call, true);
+	assert.equal(renderCall(call, true), latest);
+	touchUi(); // a fold or a tab changed
+	assert.equal(renderCall(call, true), latest); // the same HTML, built again
+	assert.notEqual(renderCall(call, false), latest); // no longer the latest: a different card
 });
 
 test('events are ordered by the time recorded, not by arrival: a late-posted call precedes the wire it caused', () => {

@@ -16,6 +16,15 @@ export function handle(ev) {
 	const run = ensureRun(ev.runId || 'unattributed', ev.ts);
 	run.events.push(ev);
 	ev.ord = orderKey(run, ev);
+	try {
+		dispatch(run, ev);
+	}
+	finally {
+		touch(touchedBy(run, ev)); // the card of that call, and of the calls it is nested in, must be drawn again
+	}
+}
+
+function dispatch(run, ev) {
 	// Shown as best as this UI can: fields it doesn't know are ignored, the header says so.
 	if ((ev.v || 0) > EVENTS_VERSION) run.newerFormat = Math.max(run.newerFormat || 0, ev.v);
 	switch (ev.type) {
@@ -68,7 +77,7 @@ export function handle(ev) {
 			if (ev.modelCallId) (run.wiredModelCalls ||= new Set()).add(ev.modelCallId);
 			if (adapterOf(wire)?.kind === 'embedding') (run.httpEmbeddings ||= []).push(wire);
 			const call = run.calls.get(ev.clientCallId);
-			if (call) { call.items.push({ kind: 'wire', ref: wire }); call.wires.push(wire); }
+			if (call) { wire.call = call; call.items.push({ kind: 'wire', ref: wire }); call.wires.push(wire); }
 			else run.items.push({ kind: 'wire', ref: wire });
 			break;
 		}
@@ -81,6 +90,7 @@ export function handle(ev) {
 			const tool = { id: ev.toolId, start: ev, end: null };
 			run.tools.set(tool.id, tool);
 			const call = run.calls.get(ev.clientCallId);
+			if (call) tool.call = call;
 			(call ? call.items : run.items).push({ kind: 'tool', ref: tool });
 			break;
 		}
@@ -187,7 +197,7 @@ function adoptEarlyItems(run, call) {
 	for (let i = run.items.length - 1; i >= 0; i--) {
 		const item = run.items[i];
 		if (item.kind === 'wire' && item.ref.req.clientCallId === call.id) {
-			run.items.splice(i, 1); call.items.unshift(item); call.wires.unshift(item.ref);
+			run.items.splice(i, 1); item.ref.call = call; call.items.unshift(item); call.wires.unshift(item.ref);
 		}
 	}
 	for (const mc of run.modelCalls.values()) {
@@ -262,4 +272,41 @@ export function linkRemoteCall(call) {
 	const caller = state.runs.get(call.linkedFrom.runId);
 	const tool = caller && caller.tools.get(call.linkedFrom.toolId);
 	if (tool) (tool.remoteCalls ||= []).push(call);
+	(call.run.linksTo ||= new Set()).add(call.linkedFrom.runId); // its events change the caller's view too
+}
+
+/** The ChatClient call an event belongs to, whose card it changes; undefined for run-level events. */
+function touchedBy(run, ev) {
+	switch (ev.type) {
+		case 'client-request': case 'client-response': return run.calls.get(ev.callId);
+		case 'model-request': case 'model-response': return run.modelCalls.get(ev.callId)?.call;
+		case 'wire-request': case 'wire-response': return run.wires.get(ev.wireId)?.call;
+		case 'tool-start': case 'tool-end': return run.tools.get(ev.toolId)?.call;
+		case 'mcp-message': return ev.toolId ? run.tools.get(ev.toolId)?.call : undefined;
+		default: return ev.clientCallId ? run.calls.get(ev.clientCallId) : undefined;
+	}
+}
+
+/**
+ * Marks a call as changed (`rev`), with the calls it is nested in, since their cards contain
+ * its card: a sub-agent's call is inside its tool's card, a remote agent's call inside the
+ * caller's tool card in another run. The card renderer caches by `rev` (see cards.js).
+ */
+export function touch(call, seen = new Set()) {
+	for (let c = call; c && !seen.has(c); c = c.parent) {
+		seen.add(c); // links are inferred by timing: a malformed recording could make them circular
+		c.rev = (c.rev || 0) + 1;
+		if (c.linkedFrom) touch(state.runs.get(c.linkedFrom.runId)?.tools.get(c.linkedFrom.toolId)?.call, seen);
+	}
+}
+
+/**
+ * Whether a live event changes what the main view shows: the selected run's events, the
+ * events of a run linked into it (a remote agent), a change of selection (following a new
+ * run) and a clear. The sidebar (counts per run) is redrawn for every event; the main view,
+ * the costly part, only for these.
+ */
+export function affectsSelected(ev, selectedBefore) {
+	if (ev.type === 'clear' || !ev.runId || state.selected !== selectedBefore || ev.runId === state.selected) return true;
+	return !!state.runs.get(ev.runId)?.linksTo?.has(state.selected);
 }
