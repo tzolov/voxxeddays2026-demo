@@ -14,10 +14,12 @@ export function handle(ev) {
 	run.events.push(ev);
 	switch (ev.type) {
 		case 'run-start':
-			run.app = ev.app || run.app; run.model = ev.model; run.started = ev.ts; run.pid = ev.pid;
+			run.app = ev.app || run.app; run.model = ev.model; run.pid = ev.pid;
 			run.imported = ev.imported; run.replayOf = ev.replayOf;
 			run.routed = new Set(ev.routed || []); // providers whose calls are recorded on the wire
-			if (state.follow) state.selected = run.id;
+			// The starter announces the run again after the inspector was unreachable (e.g. restarted):
+			// the run keeps its start and the view stays where it is.
+			if (!ev.reannounce) { run.started = ev.ts; if (state.follow) state.selected = run.id; }
 			break;
 		case 'run-end':
 			run.ended = ev.ts;

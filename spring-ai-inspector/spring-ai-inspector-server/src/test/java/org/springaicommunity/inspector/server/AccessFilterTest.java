@@ -12,7 +12,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = { "spring.ai.inspector.token=s3cret", "spring.ai.inspector.max-request-bytes=100" })
+@SpringBootTest(properties = { "spring.ai.inspector.token=s3cret", "spring.ai.inspector.max-request-bytes=100",
+		"spring.ai.inspector.max-import-bytes=1000" })
 @AutoConfigureMockMvc
 class AccessFilterTest {
 
@@ -49,6 +50,16 @@ class AccessFilterTest {
 	void oversizedEventPostsAreRefused() throws Exception {
 		this.mvc.perform(post("/api/events").header("X-Inspector-Token", "s3cret").contentType("application/json")
 			.content("{\"type\":\"x\",\"pad\":\"" + "y".repeat(200) + "\"}")).andExpect(status().is(413));
+	}
+
+	@Test
+	void importsHaveTheirOwnLargerLimit() throws Exception {
+		// A recording is many events: bigger than one event post, but still capped.
+		String recording = "[{\"type\":\"run-start\",\"runId\":\"r\",\"pad\":\"" + "y".repeat(500) + "\"}]";
+		this.mvc.perform(post("/api/import").header("X-Inspector-Token", "s3cret").contentType("application/json")
+			.content(recording)).andExpect(status().isOk());
+		this.mvc.perform(post("/api/import").header("X-Inspector-Token", "s3cret").contentType("application/json")
+			.content(recording.replace("y".repeat(500), "y".repeat(1500)))).andExpect(status().is(413));
 	}
 
 }

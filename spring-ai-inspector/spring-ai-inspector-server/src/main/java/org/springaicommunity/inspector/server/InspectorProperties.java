@@ -22,17 +22,23 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * longer ones are cut and marked {@code truncated}
  * @param maxTotalBytes rough byte budget of the in-memory event log; the oldest events are
  * dropped beyond it
- * @param maxRequestBytes largest request body accepted on {@code /api/events} and
- * {@code /api/import}
+ * @param maxRequestBytes largest event accepted on {@code /api/events}
+ * @param maxImportBytes largest recording accepted on {@code /api/import}
  */
 @ConfigurationProperties("spring.ai.inspector")
 public record InspectorProperties(Map<String, String> upstreams, @Nullable String preloadDir, @Nullable String token,
 		@Nullable List<String> allowedHosts, @DefaultValue("512000") int maxBodyChars,
-		@DefaultValue("268435456") long maxTotalBytes, @DefaultValue("16777216") long maxRequestBytes) {
+		@DefaultValue("268435456") long maxTotalBytes, @DefaultValue("16777216") long maxRequestBytes,
+		@DefaultValue("268435456") long maxImportBytes) {
 
 	/** The defaults, for code paths that have no bound properties (tests). */
 	static InspectorProperties defaults() {
-		return new InspectorProperties(Map.of(), null, null, null, 512_000, 268_435_456L, 16_777_216L);
+		return new InspectorProperties(Map.of(), null, null, null, 512_000, 268_435_456L, 16_777_216L, 268_435_456L);
+	}
+
+	/** Whether a token is configured. */
+	boolean hasToken() {
+		return this.token != null && !this.token.isBlank();
 	}
 
 }

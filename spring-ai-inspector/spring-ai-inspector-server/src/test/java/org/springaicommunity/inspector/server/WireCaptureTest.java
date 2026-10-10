@@ -58,6 +58,17 @@ class WireCaptureTest {
 	}
 
 	@Test
+	void anUnlabeledBodyIsTextUnlessItLooksBinary() {
+		Map<String, Object> text = new LinkedHashMap<>();
+		this.capture.body(text, "{\"a\":1}".getBytes(StandardCharsets.UTF_8), null, null);
+		assertThat(text).containsEntry("body", "{\"a\":1}");
+
+		Map<String, Object> bytes = new LinkedHashMap<>();
+		this.capture.body(bytes, new byte[] { 'P', 'K', 3, 4, 0, 0 }, null, null);
+		assertThat(bytes).containsEntry("bodyKind", "binary").containsEntry("size", 6);
+	}
+
+	@Test
 	void decodesGzipAndTreatsEventStreamsAsText() throws Exception {
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (GZIPOutputStream gzip = new GZIPOutputStream(bytes)) {

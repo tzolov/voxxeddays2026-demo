@@ -165,6 +165,7 @@ Settings, for the inspector server:
 | `spring.ai.inspector.max-body-chars` | `512000` | longest recorded request/response body; longer ones are cut and marked |
 | `spring.ai.inspector.max-total-bytes` | `268435456` | byte budget of the in-memory event log (oldest events dropped) |
 | `spring.ai.inspector.max-request-bytes` | `16777216` | largest event post accepted |
+| `spring.ai.inspector.max-import-bytes` | `268435456` | largest recording accepted by Import |
 
 ## Access and what gets recorded
 
@@ -222,7 +223,8 @@ node --test spring-ai-inspector/spring-ai-inspector-server/src/test/js/*.test.mj
 
 - **Keep the inspector running while instrumented apps run.** The starter points the provider base URLs at the
   inspector's proxy once, at startup. If the inspector stops while an app is still running, that app's model calls
-  fail (connection refused) until the inspector is back on the same port. Restarting the inspector is fine; stopping
+  fail (connection refused) until the inspector is back on the same port. Restarting the inspector is fine (the
+  starter announces its run again, so a token-protected inspector knows the run's upstreams); stopping
   it for good means restarting the apps too (they then talk to the providers directly again).
 
 - Wire capture covers Anthropic, OpenAI, Mistral and DeepSeek (all Chat Completions style except Anthropic), OpenAI's

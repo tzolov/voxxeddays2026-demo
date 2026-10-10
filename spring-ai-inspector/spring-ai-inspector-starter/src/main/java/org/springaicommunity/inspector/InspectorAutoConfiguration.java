@@ -154,7 +154,7 @@ public class InspectorAutoConfiguration {
 
 		@Override
 		public void afterPropertiesSet() {
-			this.client.send("run-start", () -> {
+			this.client.announce("run-start", () -> {
 				Map<String, Object> event = new LinkedHashMap<>();
 				event.put("app", this.env.getProperty("spring.ai.inspector.app"));
 				event.put("model", this.env.getProperty("spring.ai.inspector.models"));

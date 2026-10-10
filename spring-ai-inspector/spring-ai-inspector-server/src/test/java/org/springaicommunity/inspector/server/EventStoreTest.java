@@ -158,7 +158,7 @@ class EventStoreTest {
 
 	@Test
 	void dropsTheOldestEventsBeyondTheByteBudget() {
-		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L));
+		EventStore small = new EventStore(new InspectorProperties(Map.of(), null, null, null, 512_000, 10_000L, 1L, 1L));
 		for (int i = 0; i < 20; i++) {
 			Map<String, Object> event = new HashMap<>();
 			event.put("type", "wire-response");

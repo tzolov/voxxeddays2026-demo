@@ -60,10 +60,10 @@ public class ProxyController {
 
 	private final WireCapture capture;
 
-	public ProxyController(EventStore store, InspectorProperties properties, AccessFilter access) {
+	public ProxyController(EventStore store, InspectorProperties properties) {
 		this.store = store;
 		this.upstreams = properties.upstreams() == null ? Map.of() : properties.upstreams();
-		this.registeredRunsOnly = access.requiresToken();
+		this.registeredRunsOnly = properties.hasToken();
 		this.capture = new WireCapture(properties.maxBodyChars());
 	}
 

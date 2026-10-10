@@ -19,11 +19,10 @@ export function savePref(key, value) {
 // #token=<value> in the address bar, kept per browser. Sent as a header on fetches and, since an
 // EventSource can't carry headers, as a query parameter on the stream.
 export const token = (() => {
-	try {
-		const given = typeof location === 'undefined' ? null : new URLSearchParams(location.hash.slice(1)).get('token');
-		if (given) savePref('token', given);
-	} catch { /* no storage: the token lives for this page only */ }
-	return pref('token', '');
+	let given = null;
+	try { given = typeof location === 'undefined' ? null : new URLSearchParams(location.hash.slice(1)).get('token'); } catch { /* no hash */ }
+	if (given) savePref('token', given); // with no storage, the token lives for this page only
+	return given || pref('token', '');
 })();
 export const apiHeaders = (headers = {}) => (token ? { ...headers, 'X-Inspector-Token': token } : headers);
 export const apiUrl = (path) => (token ? `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : path);

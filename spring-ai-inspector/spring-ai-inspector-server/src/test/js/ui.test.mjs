@@ -17,7 +17,7 @@ import { renderMemory } from '../../main/resources/static/js/render/memory.js';
 import { renderAnswerMessage, renderSpringMessage } from '../../main/resources/static/js/render/messages.js';
 import { indentJson, prettyMaybeJson } from '../../main/resources/static/js/util.js';
 import { buildSequence, renderSequence } from '../../main/resources/static/js/render/sequence.js';
-import { noulLeaning, renderBlock, renderNormRequest, renderWire } from '../../main/resources/static/js/render/wire.js';
+import { noulLeaning, renderBlock, renderNormRequest, renderRawBody, renderWire } from '../../main/resources/static/js/render/wire.js';
 import { renderTokenPanel, tokensByModel } from '../../main/resources/static/js/render/tokens.js';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url)));
@@ -983,4 +983,22 @@ test('usage is normalized: input counts all prompt tokens, cache and reasoning a
 			usage: { prompt_tokens: 120, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 100 },
 				completion_tokens_details: { reasoning_tokens: 32 } } })));
 	assert.deepEqual([openai.usage.input, openai.usage.cacheRead, openai.usage.reasoning], [120, 100, 32]);
+});
+
+test('raw bodies: a binary body is described, a cut body says how much is missing', () => {
+	assert.match(renderRawBody({ bodyKind: 'binary', contentType: 'audio/mpeg', size: 70521 }), /binary body · audio\/mpeg · 70,521 bytes/);
+	assert.match(renderRawBody({ bodyKind: 'binary', contentType: '<b>x</b>', size: 1 }), /&lt;b&gt;x&lt;\/b&gt;/);
+	const cut = renderRawBody({ body: '{"a":"' + 'x'.repeat(20), truncated: true, size: 512000 });
+	assert.match(cut, /cut at 26 of 512,000 characters/);
+	assert.match(cut, /xxxx/);
+	assert.doesNotMatch(renderRawBody({ body: '{"a":1}' }), /cut at|binary body/);
+});
+
+test('a re-announced run keeps its start time and does not steal the selection', () => {
+	state.runs.clear(); state.follow = true;
+	handle({ type: 'run-start', runId: 'a', app: 'first', ts: 1000 });
+	handle({ type: 'run-start', runId: 'b', app: 'second', ts: 2000 });
+	handle({ type: 'run-start', runId: 'a', app: 'first', ts: 3000, reannounce: true });
+	assert.equal(state.runs.get('a').started, 1000);
+	assert.equal(state.selected, 'b');
 });

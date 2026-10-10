@@ -31,7 +31,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * {@code /api/ping} signature) needs it as {@code X-Inspector-Token} or {@code ?token=}.
  * The proxy route carries no token (the model SDKs can't add one) and instead serves only
  * runs registered with the token, see {@link ProxyController}.</li>
- * <li>Request bodies posted to the event API are capped.</li>
+ * <li>Request bodies are capped: events at {@code max-request-bytes}, recordings posted to
+ * {@code /api/import} at {@code max-import-bytes}.</li>
  * </ul>
  */
 @Component
@@ -50,11 +51,14 @@ public class AccessFilter extends OncePerRequestFilter {
 
 	private final long maxRequestBytes;
 
+	private final long maxImportBytes;
+
 	public AccessFilter(InspectorProperties properties, @Value("${server.address:}") String address) {
 		this.allowedHosts = allowedHosts(properties, address);
 		this.token = properties.token() == null || properties.token().isBlank() ? null
 				: properties.token().getBytes(StandardCharsets.UTF_8);
 		this.maxRequestBytes = properties.maxRequestBytes();
+		this.maxImportBytes = properties.maxImportBytes();
 	}
 
 	private static @Nullable Set<String> allowedHosts(InspectorProperties properties, String address) {
@@ -98,8 +102,10 @@ public class AccessFilter extends OncePerRequestFilter {
 				response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "spring.ai.inspector.token required");
 				return;
 			}
-			if (request.getContentLengthLong() > this.maxRequestBytes) {
-				response.sendError(413, "request body exceeds spring.ai.inspector.max-request-bytes");
+			boolean importing = "/api/import".equals(path);
+			if (request.getContentLengthLong() > (importing ? this.maxImportBytes : this.maxRequestBytes)) {
+				response.sendError(413, "request body exceeds spring.ai.inspector."
+						+ (importing ? "max-import-bytes" : "max-request-bytes"));
 				return;
 			}
 		}
@@ -112,11 +118,6 @@ public class AccessFilter extends OncePerRequestFilter {
 			given = request.getParameter(TOKEN_PARAM);
 		}
 		return given != null && MessageDigest.isEqual(this.token, given.getBytes(StandardCharsets.UTF_8));
-	}
-
-	/** Whether a token is configured, i.e. whether the proxy must insist on registered runs. */
-	boolean requiresToken() {
-		return this.token != null;
 	}
 
 }

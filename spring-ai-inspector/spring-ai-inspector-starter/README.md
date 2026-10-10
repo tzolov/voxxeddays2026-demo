@@ -434,7 +434,8 @@ compile-time dependencies on the libraries that define them. Every failure is sw
 
 Payloads are `Supplier`s, built inside a guard. An exception or `LinkageError` drops the event. After a failed
 post, publishing pauses for 5 seconds, so a stopped inspector costs at most one short timeout per pause. A
-restarted inspector is picked up again.
+restarted inspector is picked up again, and the run's `run-start` is posted once more (marked `reannounce`)
+before the next event, so the inspector knows the run, its app name and its upstreams again.
 
 ## Instrumenting an existing Spring AI application
 

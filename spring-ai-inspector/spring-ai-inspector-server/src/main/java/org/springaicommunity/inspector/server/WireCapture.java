@@ -86,7 +86,7 @@ final class WireCapture {
 			binary(event, contentType, bytes.length, "could not decode " + contentEncoding + ": " + ex.getMessage());
 			return;
 		}
-		if (!isText(contentType)) {
+		if (!isText(contentType, decoded)) {
 			binary(event, contentType, decoded.length, null);
 			return;
 		}
@@ -108,9 +108,15 @@ final class WireCapture {
 		}
 	}
 
-	static boolean isText(@Nullable String contentType) {
+	/** By the content type; an unlabeled body is text unless its first bytes include a NUL. */
+	static boolean isText(@Nullable String contentType, byte[] body) {
 		if (contentType == null || contentType.isBlank()) {
-			return true; // chat APIs always say; an unlabeled body is most likely JSON
+			for (int i = 0; i < Math.min(body.length, 512); i++) {
+				if (body[i] == 0) {
+					return false;
+				}
+			}
+			return true;
 		}
 		String type = contentType.toLowerCase(Locale.ROOT);
 		return type.startsWith("text/") || TEXT_TYPES.stream().anyMatch(type::contains);
