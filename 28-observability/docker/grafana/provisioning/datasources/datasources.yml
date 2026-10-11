@@ -1,0 +1,59 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      # A latency sample's exemplar opens its trace in Tempo.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: true
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: prometheus
+        tags: [{ key: 'service.name', value: 'application' }]
+        queries:
+          - name: 'Model calls'
+            query: 'sum(rate(gen_ai_client_operation_seconds_count{$$__tags}[$$__rate_interval]))'
+          - name: 'Model latency p95'
+            query: 'histogram_quantile(0.95, sum(rate(gen_ai_client_operation_seconds_bucket{$$__tags}[$$__rate_interval])) by (le))'
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      # "Logs for this span": the app's lines that carry the span's trace id, around the span's time.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{app="conference-helpdesk"} |= "$${__span.traceId}"'
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 200
+      # The [traceId-spanId] bracket in each line becomes a link to the trace in Tempo.
+      derivedFields:
+        - name: traceId
+          datasourceUid: tempo
+          matcherRegex: '\[([0-9a-f]{32})-[0-9a-f]{16}\]'
+          url: '$${__value.raw}'
+          urlDisplayLabel: 'trace'

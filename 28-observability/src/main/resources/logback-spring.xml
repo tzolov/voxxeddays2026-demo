@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Boot's console output, unchanged, plus the same lines pushed to Loki. The trace and span ids are in
+     the message (Grafana's derived field links them to Tempo) and in the structured metadata (for LogQL). -->
+<configuration>
+	<include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+	<include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+	<springProperty scope="context" name="app" source="spring.application.name" defaultValue="app"/>
+
+	<appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+		<http>
+			<url>http://localhost:3100/loki/api/v1/push</url>
+		</http>
+		<labels>
+			app=${app}
+			level=%level
+		</labels>
+		<structuredMetadata>
+			logger=%logger
+			thread=%thread
+			traceId=%X{traceId:-}
+			spanId=%X{spanId:-}
+		</structuredMetadata>
+		<message>
+			<pattern>%-5level [%thread] [%X{traceId:-}-%X{spanId:-}] %logger{36} : %msg%n%ex</pattern>
+		</message>
+	</appender>
+
+	<root level="INFO">
+		<appender-ref ref="CONSOLE"/>
+		<appender-ref ref="LOKI"/>
+	</root>
+</configuration>

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helpdesk controls</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --line: #d9dde3; --text: #1f2430; --muted: #6b7280; --accent: #2563eb;
+          --accent-soft: #e8efff; --ok: #15803d; --ok-soft: #e6f6ea; --warn: #b45309; --warn-soft: #fff3e0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15181e; --panel: #1d2129; --line: #353b46; --text: #e6e8ec; --muted: #9aa3b2; --accent: #7aa2ff;
+            --accent-soft: #24304d; --ok: #4ade80; --ok-soft: #173224; --warn: #fbbf24; --warn-soft: #3a2b12; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.5rem 1rem; background: var(--bg); color: var(--text);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.25rem; }
+  .sub a { color: var(--accent); text-decoration: none; margin-right: .9rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: .8rem; padding: 1rem 1.1rem; }
+  section h2 { font-size: 1rem; margin: 0 0 .75rem; display: flex; align-items: center; justify-content: space-between; }
+  .pill { font-size: .78rem; border-radius: 999px; padding: .1rem .6rem; border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+  .pill.on { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+  label { display: block; font-size: .85rem; color: var(--muted); margin: .6rem 0 .2rem; }
+  label b { color: var(--text); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=text], select { width: 100%; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: .45rem;
+         background: var(--bg); color: var(--text); font: inherit; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .75rem; }
+  button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: .45rem;
+           padding: .4rem .8rem; cursor: pointer; font: inherit; font-size: .9rem; }
+  button:hover { background: var(--accent-soft); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; }
+  .toggle { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; font-size: .9rem; }
+  .stats { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .5rem; }
+  .last { font-size: .88rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: .6rem; margin-top: .6rem; }
+  .last b { color: var(--text); }
+  .answer { white-space: pre-wrap; font-size: .9rem; margin-top: .6rem; }
+  .err { color: var(--warn); font-size: .85rem; margin-top: .5rem; min-height: 1.2em; }
+  .preset { font-size: .82rem; }
+  .wide { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Conference helpdesk</h1>
+  <p class="sub">
+    <a href="http://localhost:3000/d/spring-ai-helpdesk" target="_blank">Grafana: Spring AI</a>
+    <a href="http://localhost:3000/d/jvm-micrometer" target="_blank">Grafana: JVM</a>
+    <a href="http://localhost:3000/explore" target="_blank">Tempo traces</a>
+    <a href="http://localhost:9090" target="_blank">Prometheus</a>
+    <a href="/actuator/prometheus" target="_blank">/actuator/prometheus</a>
+    <a href="http://localhost:9001" target="_blank">Inspector</a>
+  </p>
+
+  <div class="grid">
+    <section id="traffic">
+      <h2>Traffic generator <span class="pill" id="traffic-state">…</span></h2>
+      <div class="stats">
+        <span class="pill">sent <b id="sent">0</b></span>
+        <span class="pill">failed <b id="failed">0</b></span>
+      </div>
+      <div class="row">
+        <button class="primary" id="start">Start</button>
+        <button id="stop">Stop</button>
+      </div>
+      <div class="last">
+        <div>last question: <b id="last-q">–</b></div>
+        <div>last answer: <span id="last-a">–</span></div>
+      </div>
+    </section>
+
+    <section id="chaos">
+      <h2>Chaos <span class="pill" id="chaos-state">off</span></h2>
+
+      <label>Tool failure rate: <b id="rate-v">0 %</b></label>
+      <input type="range" id="rate" min="0" max="100" step="5" value="0">
+
+      <label>Advisor latency: <b id="latency-v">0 ms</b></label>
+      <input type="range" id="latency" min="0" max="5000" step="250" value="0">
+
+      <label>Wrong model name every N calls (0 = off): <b id="badmodel-v">off</b></label>
+      <input type="range" id="badmodel" min="0" max="10" step="1" value="0">
+
+      <div class="toggle">
+        <input type="checkbox" id="content">
+        <label for="content" style="margin:0">Log questions and answers (with trace ids)</label>
+      </div>
+
+      <div class="row">
+        <button class="primary" id="apply">Apply</button>
+        <button id="reset">Reset all</button>
+      </div>
+      <div class="row preset">
+        <span style="color:var(--muted)">presets:</span>
+        <button data-preset="flaky">flaky tool</button>
+        <button data-preset="slow">slow advisor</button>
+        <button data-preset="badmodel">wrong model</button>
+      </div>
+      <div class="err" id="chaos-err"></div>
+    </section>
+
+    <section class="wide" id="ask">
+      <h2>Ask by hand</h2>
+      <div class="row">
+        <input type="text" id="q" placeholder="When is the Spring AI talk and in which room?" style="flex: 1 1 320px">
+        <select id="provider" style="width: auto">
+          <option value="anthropic">anthropic</option>
+          <option value="openai">openai</option>
+        </select>
+        <button class="primary" id="send">Ask</button>
+      </div>
+      <div class="answer" id="answer"></div>
+      <div class="err" id="ask-err"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const post = (url, params) => fetch(url + (params ? '?' + new URLSearchParams(params) : ''), { method: 'POST' })
+    .then(async (r) => { const body = await r.json().catch(() => ({})); if (!r.ok) throw new Error(body.error || r.statusText); return body; });
+  const get = (url) => fetch(url).then((r) => r.json());
+
+  // --- traffic ---
+  function showTraffic(s) {
+    $('traffic-state').textContent = s.running ? 'running' : 'stopped';
+    $('traffic-state').className = 'pill' + (s.running ? ' on' : '');
+    $('sent').textContent = s.sent;
+    $('failed').textContent = s.failed;
+    $('last-q').textContent = s.lastQuestion || '–';
+    $('last-a').textContent = s.lastAnswer || '–';
+    $('start').disabled = s.running;
+    $('stop').disabled = !s.running;
+  }
+  $('start').onclick = () => post('/traffic/start').then(showTraffic);
+  $('stop').onclick = () => post('/traffic/stop').then(showTraffic);
+
+  // --- chaos ---
+  const sliders = { rate: (v) => v + ' %', latency: (v) => v + ' ms', badmodel: (v) => v == 0 ? 'off' : 'every ' + v + (v == 1 ? 'st' : v == 2 ? 'nd' : v == 3 ? 'rd' : 'th') + ' call' };
+  for (const id in sliders) {
+    $(id).oninput = () => { $(id + '-v').textContent = sliders[id]($(id).value); };
+  }
+  function showChaos(c) {
+    $('rate').value = Math.round(c.toolFailureRate * 100);
+    $('latency').value = c.latencyMs;
+    $('badmodel').value = c.badModelEveryN;
+    $('content').checked = c.logContent;
+    for (const id in sliders) $(id + '-v').textContent = sliders[id]($(id).value);
+    const on = c.toolFailureRate > 0 || c.latencyMs > 0 || c.badModelEveryN > 0 || c.logContent;
+    $('chaos-state').textContent = on ? 'active' : 'off';
+    $('chaos-state').className = 'pill' + (on ? ' warn' : '');
+    $('chaos-err').textContent = '';
+  }
+  function applyChaos(values) {
+    return post('/chaos', values).then(showChaos).catch((e) => { $('chaos-err').textContent = e.message; });
+  }
+  $('apply').onclick = () => applyChaos({
+    toolFailureRate: $('rate').value / 100, latencyMs: $('latency').value,
+    badModelEveryN: $('badmodel').value, logContent: $('content').checked });
+  $('reset').onclick = () => post('/chaos/reset').then(showChaos);
+  const presets = {
+    flaky: { toolFailureRate: 0.5 },
+    slow: { latencyMs: 1500 },
+    badmodel: { badModelEveryN: 3 },
+  };
+  document.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => applyChaos(presets[b.dataset.preset]); });
+
+  // --- ask ---
+  async function ask() {
+    const q = $('q').value.trim();
+    if (!q) return;
+    $('send').disabled = true; $('ask-err').textContent = ''; $('answer').textContent = '…';
+    try {
+      const a = await post('/ask', { q, provider: $('provider').value });
+      $('answer').textContent = '[' + a.provider + '] ' + a.answer;
+    }
+    catch (e) { $('answer').textContent = ''; $('ask-err').textContent = e.message; }
+    finally { $('send').disabled = false; }
+  }
+  $('send').onclick = ask;
+  $('q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
+
+  // --- refresh: the traffic counters move on their own, the chaos settings only from here (or curl) ---
+  function refresh() { get('/traffic').then(showTraffic).catch(() => {}); get('/chaos').then(showChaos).catch(() => {}); }
+  refresh();
+  setInterval(() => get('/traffic').then(showTraffic).catch(() => {}), 3000);
+  setInterval(() => get('/chaos').then(showChaos).catch(() => {}), 10000);
+</script>
+</body>
+</html>

@@ -64,6 +64,7 @@
 		<module>25-speech-and-transcription</module>
 		<module>26-audio-chat</module>
 		<module>27-gemini-image-chat</module>
+		<module>28-observability</module>
 
 	</modules>
 
