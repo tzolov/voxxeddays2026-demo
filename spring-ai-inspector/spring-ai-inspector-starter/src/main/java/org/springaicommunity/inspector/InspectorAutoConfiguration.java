@@ -2,13 +2,13 @@ package org.springaicommunity.inspector;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import org.springaicommunity.inspector.InspectorAdvisor.Phase;
 import io.micrometer.observation.ObservationRegistry;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientBuilderCustomizer;
-import org.springframework.ai.tool.observation.ToolCallingObservationContext;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,6 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.Environment;
+import org.springframework.util.function.SingletonSupplier;
 
 /**
  * Active only when {@link InspectorEnvironmentPostProcessor} found a running Demo
@@ -167,13 +168,6 @@ public class InspectorAutoConfiguration {
 		return new InspectorToolOrigins();
 	}
 
-	@Bean
-	@ConditionalOnClass(ToolCallingObservationContext.class)
-	InspectorToolObservationHandler inspectorToolObservationHandler(InspectorClient client,
-			InspectorToolOrigins origins) {
-		return new InspectorToolObservationHandler(client, origins);
-	}
-
 	/**
 	 * Spring AI only emits tool-call observations when an {@link ObservationRegistry}
 	 * exists. The demos don't include Boot's observation support, so provide one.
@@ -184,15 +178,25 @@ public class InspectorAutoConfiguration {
 		return ObservationRegistry.create();
 	}
 
-	/** Registers the tool handler with whichever registry the application ends up with. */
+	/**
+	 * Registers the tool handler with whichever registry the application ends up with, its
+	 * own or Boot's. The handler is deliberately not a bean: Boot's observation
+	 * auto-configuration registers every {@code ObservationHandler} bean on the registry,
+	 * which would run the handler twice per tool call (its de-duplication by tool-call id
+	 * hid that, at the cost of a second pass over every start and stop).
+	 */
 	@Bean
-	static BeanPostProcessor inspectorObservationRegistryPostProcessor(
-			ObjectProvider<InspectorToolObservationHandler> handler) {
+	static BeanPostProcessor inspectorObservationRegistryPostProcessor(ObjectProvider<InspectorClient> client,
+			ObjectProvider<InspectorToolOrigins> origins) {
 		return new BeanPostProcessor() {
+
+			private final Supplier<InspectorToolObservationHandler> handler = SingletonSupplier
+				.of(() -> new InspectorToolObservationHandler(client.getObject(), origins.getObject()));
+
 			@Override
 			public Object postProcessAfterInitialization(Object bean, String beanName) {
 				if (bean instanceof ObservationRegistry registry) {
-					handler.ifAvailable(h -> registry.observationConfig().observationHandler(h));
+					registry.observationConfig().observationHandler(this.handler.get());
 				}
 				return bean;
 			}

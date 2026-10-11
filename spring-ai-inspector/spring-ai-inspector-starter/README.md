@@ -352,7 +352,10 @@ Spring AI wraps each tool execution in a Micrometer observation with a `ToolCall
 
 - Spring AI emits these observations only when an `ObservationRegistry` bean exists. If the app has none, the
   starter provides one (`@ConditionalOnMissingBean`). A static `BeanPostProcessor` registers the handler on
-  whichever registry the app ends up with, its own or Actuator's.
+  whichever registry the app ends up with, its own or Actuator's. The handler is not a bean on purpose: Boot's
+  observation auto-configuration registers every `ObservationHandler` bean it finds, which would run the handler
+  twice per tool call (its de-duplication by tool-call id would still report each run once). Actuator's metrics and tracing are not affected either way: the starter adds no key-values
+  to any observation, only private context entries (`inspector.callId` and friends), which no exporter sees.
 - A tool observation's parent is the ChatClient call that asked for it (Spring AI sets it, also in a streamed
   call), which attributes the run; the handler tags the observation with the run id for sub-agents.
 - Spring AI starts one observation per tool execution. A `ToolCallingManager` wrapping the default one may
