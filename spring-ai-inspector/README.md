@@ -79,8 +79,8 @@ choice is remembered per browser.
 
 Each run has a **Cards | Sequence** toggle. The sequence view draws the run as lanes (app, advisors, sub-agents, each
 model, systemOne model, tools, vector store) with arrows in time order: requests solid, returns dashed, labelled with message
-counts, `tool_use` names, stop reasons and latencies. **to scale** spaces rows by elapsed time, so the audience sees
-where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane. The
+counts, `tool_use` names, stop reasons and latencies. **to scale**, on the diagram's header, spaces rows by elapsed
+time, so the audience sees where the time goes. Clicking an arrow opens it in the Cards view. In-process sub-agents (16) get their own lane. The
 lane heads stay in view while a long diagram scrolls (under the pinned tokens panel, when it is pinned).
 
 Calls in another JVM are **linked by timing**. When a ChatClient call starts while another run has a tool call open

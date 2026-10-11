@@ -51,9 +51,7 @@ export function renderMain() {
 	const view = pref('view', 'cards');
 	const scaled = pref('seqScale', 'ordered') === 'scaled';
 	const viewToggle = `<div class="seg"><button class="btn ${view === 'cards' ? 'on' : ''}" data-action="view-cards">Cards</button>
-		<button class="btn ${view === 'sequence' ? 'on' : ''}" data-action="view-sequence">Sequence</button></div>
-		${view === 'sequence' ? `<div class="seg"><button class="btn ${scaled ? '' : 'on'}" data-action="seq-ordered" title="One row per event">ordered</button>
-		<button class="btn ${scaled ? 'on' : ''}" data-action="seq-scaled" title="Gaps proportional to elapsed time">to scale</button></div>` : ''}`;
+		<button class="btn ${view === 'sequence' ? 'on' : ''}" data-action="view-sequence">Sequence</button></div>`;
 	const actions = run.events.length && !replaying ? `<div class="run-actions">${viewToggle}
 		<button class="btn" data-action="export" title="Save this run as JSON">Export</button>
 		<select class="btn" id="replay-speed" title="Replay pace">${['step', '1', '2', '4'].map((v) =>
@@ -108,8 +106,8 @@ function watchStickyOffsets() {
 
 /** Keeps the sticky lane heads aligned with the sequence diagram scrolled sideways under them. */
 export function syncSequenceHead(wrap) {
-	const head = wrap.parentElement?.querySelector('.seq-head');
-	if (head) head.scrollLeft = wrap.scrollLeft;
+	const lanes = wrap.parentElement?.querySelector('.seq-lanes');
+	if (lanes) lanes.scrollLeft = wrap.scrollLeft;
 }
 
 export let renderPending = false;

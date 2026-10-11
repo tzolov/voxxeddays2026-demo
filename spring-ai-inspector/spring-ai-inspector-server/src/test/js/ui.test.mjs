@@ -774,9 +774,12 @@ test('runs of embedding calls fold into one group, in cards and in the sequence'
 	// The lane heads are drawn in their own (sticky) header, above the diagram.
 	const seq = renderSequence(run, false);
 	assert.match(seq, /<div class="seq-view" data-run="rag">/);
-	const [head, body] = [seq.match(/<div class="seq-head">([\s\S]*?)<\/div>/)[1], seq.match(/<div class="seq-wrap">([\s\S]*?)<\/div>/)[1]];
-	assert.match(head, /lane-head[\s\S]*text-embedding-3-small/);
+	const [head, body] = [seq.match(/<div class="seq-head">([\s\S]*?)<div class="seq-wrap">/)[1], seq.match(/<div class="seq-wrap">([\s\S]*?)<\/div>/)[1]];
+	assert.match(head, /<div class="seq-lanes">[\s\S]*lane-head[\s\S]*text-embedding-3-small/);
 	assert.doesNotMatch(body, /lane-head/);
+	// The scale toggle is on the diagram's header, not the run toolbar, which stays the same in both views.
+	assert.match(head, /<div class="seq-tools">[\s\S]*class="btn on" data-action="seq-ordered"[\s\S]*class="btn" data-action="seq-scaled"/);
+	assert.match(renderSequence(run, true), /class="btn" data-action="seq-ordered"[\s\S]*class="btn on" data-action="seq-scaled"/);
 	assert.match(body, /5 embedding calls/);
 });
 

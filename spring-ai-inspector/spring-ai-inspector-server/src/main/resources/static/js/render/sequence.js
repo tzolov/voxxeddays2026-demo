@@ -267,7 +267,8 @@ export function renderSequence(run, scaled) {
 	const height = ys[ys.length - 1] + ROW + 10;
 	const width = LEFT * 2 + lanes.length * LANE_W;
 	// The lane heads are drawn apart, in a header that stays in view while the diagram scrolls
-	// (see .seq-head); both share one coordinate system, the diagram starting below the heads.
+	// (see .seq-head, scrolled sideways with it); both share one coordinate system, the diagram
+	// starting below the heads.
 	let svg = ''; let head = '';
 	// remote groups
 	for (const [gid, label] of groups) {
@@ -314,7 +315,11 @@ export function renderSequence(run, scaled) {
 	});
 	const colors = { call: '--text', model: '--assistant', tool: '--tool', jev: '--system', vector: '--user', remote: '--accent' };
 	const defs = `<defs>${Object.entries(colors).map(([kd, c]) => `<marker id="ah-${kd}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(${c});stroke:none"/></marker>`).join('')}</defs>`;
-	return `<div class="seq-view" data-run="${esc(run.id)}"><div class="seq-head"><svg width="${width}" height="${HEAD}" viewBox="0 0 ${width} ${HEAD}">${head}</svg></div>
+	// The scale toggle sits on the diagram it changes, so the run's toolbar is the same in both
+	// views. Unlike the toolbar it stays during a replay: the diagram is still being drawn then.
+	const tools = `<div class="seq-tools"><div class="seg"><button class="btn${scaled ? '' : ' on'}" data-action="seq-ordered" title="One row per event">ordered</button>
+		<button class="btn${scaled ? ' on' : ''}" data-action="seq-scaled" title="Gaps proportional to elapsed time">to scale</button></div></div>`;
+	return `<div class="seq-view" data-run="${esc(run.id)}"><div class="seq-head">${tools}<div class="seq-lanes"><svg width="${width}" height="${HEAD}" viewBox="0 0 ${width} ${HEAD}">${head}</svg></div></div>
 		<div class="seq-wrap"><svg width="${width}" height="${height - HEAD}" viewBox="0 ${HEAD} ${width} ${height - HEAD}">${defs}${svg}</svg></div></div>
 		<div class="s1-crit" style="margin-top:.4rem">Click an arrow to open it in the Cards view. Dashed arrows are returns.</div>`;
 }
