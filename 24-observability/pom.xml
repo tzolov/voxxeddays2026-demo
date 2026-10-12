@@ -8,8 +8,8 @@
 		<artifactId>voxxeddays2026-demo</artifactId>
 		<version>0.0.1-SNAPSHOT</version>
 	</parent>
-	<artifactId>28-observability</artifactId>
-	<name>28 - Observability: Prometheus, Grafana and Tempo</name>
+	<artifactId>24-observability</artifactId>
+	<name>24 - Observability: Prometheus, Grafana, Tempo and Loki</name>
 	<description>Spring AI: a conference helpdesk agent under steady traffic, with metrics, traces and dashboards</description>
 
 	<dependencies>

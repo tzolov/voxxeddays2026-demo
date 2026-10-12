@@ -7,10 +7,11 @@
 		<groupId>com.example</groupId>
 		<artifactId>voxxeddays2026-demo</artifactId>
 		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath>
 	</parent>
-	<artifactId>24-image-generation</artifactId>
-	<name>24 - Image generation</name>
-	<description>Spring AI: image generation on its own and from a tool, as the inspector sees it (wire and model bean)</description>
+	<artifactId>23-multimodality-3-speech-and-transcription</artifactId>
+	<name>23.3 - Speech and transcription</name>
+	<description>Spring AI: text to speech and back to text, as the inspector sees it (binary and multipart bodies)</description>
 
 	<dependencies>
 		<dependency>

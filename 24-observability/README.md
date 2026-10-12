@@ -1,4 +1,4 @@
-# 28 - Observability: Prometheus, Grafana, Tempo and Loki
+# 24 - Observability: Prometheus, Grafana, Tempo and Loki
 
 A conference helpdesk agent (three tools, a FAQ in a vector store, two model providers) kept busy by its own
 traffic generator, with Spring AI's Micrometer observations exported three ways: **metrics** to Prometheus,
@@ -9,7 +9,7 @@ the same calls one by one: Grafana shows the aggregate, the inspector the single
 ## Run
 
 ```bash
-cd 28-observability/docker && docker compose up -d        # Prometheus :9090, Tempo :3200/:4318, Loki :3100, Grafana :3000
+cd 24-observability/docker && docker compose up -d        # Prometheus :9090, Tempo :3200/:4318, Loki :3100, Grafana :3000
 cd .. && mvn spring-boot:run                              # or run HelpdeskApplication from the IDE
 ```
 

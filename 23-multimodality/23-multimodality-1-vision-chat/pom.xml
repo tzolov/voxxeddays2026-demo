@@ -7,10 +7,11 @@
 		<groupId>com.example</groupId>
 		<artifactId>voxxeddays2026-demo</artifactId>
 		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath>
 	</parent>
-	<artifactId>25-speech-and-transcription</artifactId>
-	<name>25 - Speech and transcription</name>
-	<description>Spring AI: text to speech and back to text, as the inspector sees it (binary and multipart bodies)</description>
+	<artifactId>23-multimodality-1-vision-chat</artifactId>
+	<name>23.1 - Vision chat</name>
+	<description>Spring AI: an image and a PDF as chat input, with Claude or a local Ollama vision model, as the inspector sees it</description>
 
 	<dependencies>
 		<dependency>
@@ -19,7 +20,11 @@
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-model-openai</artifactId>
+			<artifactId>spring-ai-starter-model-anthropic</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-ollama</artifactId>
 		</dependency>
 	</dependencies>
 
