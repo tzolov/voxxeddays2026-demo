@@ -18,9 +18,9 @@
 			<artifactId>spring-ai-client-chat</artifactId>
 		</dependency>
 		<!-- Spring AI Inspector instrumentation: every demo reports to a running inspector, transitively -->
-		<dependency>
+		<!-- <dependency>
 			<groupId>org.springaicommunity</groupId>
 			<artifactId>spring-ai-inspector-starter</artifactId>
-		</dependency>
+		</dependency> -->
 	</dependencies>
 </project>
