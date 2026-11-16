@@ -1,15 +1,16 @@
 package com.example.demo;
 
 import java.util.Random;
+import java.util.function.Predicate;
 
-import org.springaicommunity.typesafe.JsonContent;
-import org.springaicommunity.typesafe.TypeSafeClient;
-import org.springaicommunity.typesafe.advisor.JevSelfRefineAdvisor;
-import org.springaicommunity.typesafe.judge.JevJudge;
-import org.springaicommunity.typesafe.question.Noul;
-import org.springaicommunity.typesafe.question.Score;
+import org.springaicommunity.decision.judge.DecisionJudge;
+import org.springaicommunity.decision.selfrefine.DecisionSelfRefineAdvisor;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.decision.DecisionModel;
+import org.springframework.ai.decision.question.ScoreQuestion;
+import org.springframework.ai.decision.question.YesNoQuestion;
+import org.springframework.ai.systemone.api.SystemOneRetryUtils;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -18,11 +19,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.Ordered;
 
 /**
- * Model-as-a-judge with TypeSafe Jev doing the judging.
+ * Model-as-a-judge with a {@link DecisionJudge} doing the judging, on Spring AI's
+ * {@link DecisionModel} (TypeSafe's Jev, through the System One provider).
  *
  * The weather tool deliberately returns an absurd temperature part of the time. A judge
  * model asked for an overall rating tends to wave that through, because the answer reads
- * fluently and is on topic. The {@code is_plausible} noul does not: it is a single
+ * fluently and is on topic. The {@code is_plausible} yes/no question does not: it is a single
  * question with a single job, so the advisor sees the defect, feeds it back and the model
  * tries again.
  */
@@ -34,7 +36,7 @@ public class ModelJudgeDemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, TypeSafeClient typeSafeClient) {
+	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DecisionModel decisionModel) {
 		return args -> { // @formatter:off
 
 			ChatClient chatClient = chatClientBuilder
@@ -44,10 +46,13 @@ public class ModelJudgeDemoApplication {
 				// BEFORE_TOOLS_ORDER places the advisor before the tool loop, so a rejected
 				// answer is retried with a fresh call to the weather tool, and the tool calls
 				// of each attempt are recorded for the judge as `tool_calls`.
-				.defaultAdvisors(JevSelfRefineAdvisor.builder()
-					.order(JevSelfRefineAdvisor.BEFORE_TOOLS_ORDER)
-					.judge(createWeatherJudge(typeSafeClient))
+				.defaultAdvisors(DecisionSelfRefineAdvisor.builder()
+					.order(DecisionSelfRefineAdvisor.BEFORE_TOOLS_ORDER)
+					.judge(createWeatherJudge(decisionModel))
 					.maxRepeatAttempts(10)
+					// a System One outage is transient too: the answer passes unjudged instead of failing
+					.transientErrorPredicate(((Predicate<Throwable>) DecisionSelfRefineAdvisor::isTransient)
+						.or(SystemOneRetryUtils::isTransient))
 					.build())
 
 				.defaultAdvisors(MyLoggingAdvisor.builder()
@@ -87,30 +92,29 @@ public class ModelJudgeDemoApplication {
 	 * {@code is_plausible} alone, instead of averaging the problem away into a middling
 	 * score.
 	 */
-	static JevJudge createWeatherJudge(TypeSafeClient typeSafeClient) { // @formatter:off
-		return JevJudge.builder(typeSafeClient)
-			.score("helpfulness", Score.builder()
-					.instructions("How well does `assistant_answer` address the question in `user_question`?")
+	static DecisionJudge createWeatherJudge(DecisionModel decisionModel) { // @formatter:off
+		return DecisionJudge.builder(decisionModel)
+			.score("helpfulness", ScoreQuestion.builder()
+					.text("How well does `assistant_answer` address the question in `user_question`?")
 					.level("Terrible: irrelevant to the question, or almost entirely missing")
 					.level("Mostly unhelpful: misses key aspects of the question")
 					.level("Mostly helpful: answers the question but could be improved")
 					.level("Excellent: relevant, direct and addresses every concern raised")
 					.build(), 2.0d)
-			.noul("is_plausible", Noul.builder()
-					.instructions("Are all the numeric values in `assistant_answer` physically plausible for their units?")
-					.whenTrue("Every value is within a range that can actually occur")
-					.whenFalse("At least one value is impossible, such as a temperature below absolute zero "
+			.yesNo("is_plausible", YesNoQuestion.builder()
+					.text("Are all the numeric values in `assistant_answer` physically plausible for their units?")
+					.whenYes("Every value is within a range that can actually occur")
+					.whenNo("At least one value is impossible, such as a temperature below absolute zero "
 							+ "or far outside anything ever recorded on Earth")
 					.build(), 0.7d)
-			.noul("is_grounded", Noul.builder()
-					.instructions(JsonContent.object(
-						"question", "Does `assistant_answer` stay within what `user_question` asked, without asserting unrelated facts?",
-						"note", "The assistant has a weather tool, so specific weather values for the place asked "
-								+ "about are expected and are not themselves unsupported."))
-					.whenTrue("Answers the question asked, adding no unrelated factual claims")
-					.whenFalse("Introduces facts that appear nowhere in the question")
+			.yesNo("is_grounded", YesNoQuestion.builder()
+					.text("Does `assistant_answer` stay within what `user_question` asked, without asserting unrelated facts? "
+							+ "The assistant has a weather tool, so specific weather values for the place asked "
+							+ "about are expected and are not themselves unsupported.")
+					.whenYes("Answers the question asked, adding no unrelated factual claims")
+					.whenNo("Introduces facts that appear nowhere in the question")
 					.build(), 0.5d)
-			// Whether the tool was called at all is a code check: exact, free and never sent to Jev.
+			// Whether the tool was called at all is a code check: exact, free and never sent to the decision model.
 			.check("used_weather_tool", input -> !input.toolCalls().isEmpty(),
 					"answered without calling the weather tool")
 			.build();

@@ -56,23 +56,11 @@
 			<version>9.12.3</version>
 		</dependency>
 
+		<!-- tool-index-type=decision needs a DecisionModel: TypeSafe's Jev, through Spring AI's System One provider -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-vector-store</artifactId>
+			<artifactId>spring-ai-starter-model-systemone</artifactId>
 		</dependency>
-
-		<dependency>
-			<groupId>org.springaicommunity</groupId>
-			<artifactId>spring-ai-starter-typesafe</artifactId>
-			<version>${spring-ai-typesafe.version}</version>
-		</dependency>
-
-		<dependency>
-			<groupId>org.springaicommunity</groupId>
-			<artifactId>typesafe-spring-ai</artifactId>
-			<version>${spring-ai-typesafe.version}</version>
-		</dependency>
-
 
 	</dependencies>
 

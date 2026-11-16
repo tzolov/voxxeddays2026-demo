@@ -5,7 +5,7 @@ import java.util.List;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.toolsearch.ToolSearchToolCallingAdvisor;
-import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.toolsearch.ToolIndex;
@@ -42,7 +42,8 @@ public class TsTDemoApplication {
 				.defaultAdvisors(smarthToolCallAdvisor)
 				.defaultAdvisors(loggingAdvisor)
 				.defaultAdvisors(new TokenCounterAdvisor())
-				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, "chat_memory_conversation_id"))
+				// The conversation id scopes the tool search index (no chat memory in this demo)
+				.defaultAdvisors(a -> a.param(MemoryAdvisor.CONVERSATION_ID, "chat_memory_conversation_id"))
 				.build();
 
 			var answer = chatClient.prompt("""

@@ -132,14 +132,15 @@ By default, the tool validates that all questions are answered. To allow partial
 
 ### Adjust Chat Memory
 
-The demo keeps the last 500 messages in memory (line 64). Adjust this value based on your needs:
+The demo keeps the conversation in Spring AI session memory (`SessionAdvisors` over an in-memory
+`SessionService`), and every call names its session with `SessionAdvisors.session(...)`. To bound the
+history sent to the model, read only the last events, or compact the session as it grows:
 
 ```java
-MessageChatMemoryAdvisor.builder(
-    MessageWindowChatMemory.builder()
-        .maxMessages(100)  // Change this value
-        .build()
-).build()
+SessionAdvisors.builder(sessionService)
+    .memory(memory -> memory.eventFilter(EventFilter.lastN(100)))  // replay the last 100 events
+    // or: .compaction(new TurnCountTrigger(20), WindowCompactionStrategy.builder().lastTurns(10).build())
+    .build()
 ```
 ### Change AI Provider
 

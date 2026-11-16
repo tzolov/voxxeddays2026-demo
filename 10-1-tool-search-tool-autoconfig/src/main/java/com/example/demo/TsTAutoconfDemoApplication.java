@@ -4,21 +4,16 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
-import org.springaicommunity.typesafe.TypeSafeClient;
-import org.springaicommunity.typesafe.toolsearch.JevToolIndex;
-
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.ai.tool.toolsearch.ToolIndex;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.Ordered;
 
@@ -34,18 +29,6 @@ public class TsTAutoconfDemoApplication {
 		return SimpleVectorStore.builder(embeddingModel).build();
 	}
 
-	// tool-index-type=jev: TypeSafe's Jev picks the tools. Unlike the regex, lucene and
-	// vector indexes it can also answer "no tool applies". The built-in indexes back off
-	// when a ToolIndex bean exists.
-	@Bean
-	@ConditionalOnProperty(name = "spring.ai.chat.client.tool-search-advisor.tool-index-type", havingValue = "jev")
-	ToolIndex jevToolIndex(TypeSafeClient typeSafeClient) {
-		return JevToolIndex.builder(typeSafeClient)
-			.applicabilityThreshold(0.5) // below this, no tool is returned at all
-			.minimumRelevance(0.05) // don't pad maxResults with tools Jev ruled out
-			.build();
-	}
-
 	@Bean
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder) {
 		return args -> { // @formatter:off
@@ -59,7 +42,8 @@ public class TsTAutoconfDemoApplication {
 				.defaultTools(new MyTools(), new DummyTools())
 				.defaultAdvisors(loggingAdvisor)
 				.defaultAdvisors(new TokenCounterAdvisor())
-				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, "chat_memory_conversation_id"))
+				// The conversation id scopes the tool search index (no chat memory in this demo)
+				.defaultAdvisors(a -> a.param(MemoryAdvisor.CONVERSATION_ID, "chat_memory_conversation_id"))
 				.build();
 
 			var answer = chatClient.prompt("""

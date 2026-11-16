@@ -23,16 +23,16 @@ import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.core.Ordered;
 import org.springframework.core.io.Resource;
 
 @SpringBootApplication
@@ -106,13 +106,15 @@ public class Application {
 					BraveWebSearchTool.builder(braveApiKey).resultCount(15).build())
 
 				// Advisors
-				.defaultAdvisors(
-					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build())
-						.order(Ordered.HIGHEST_PRECEDENCE + 1000)
-						.build(),
-					MyLoggingAdvisor.builder().labelPrefix("[]").showAvailableTools(true).order(0).build())
+				.defaultAdvisors(SessionAdvisors.builder(DefaultSessionService.builder()
+					.sessionRepository(InMemorySessionRepository.builder().build())
+					.build())
+					// replay the last 500 events, extended to whole turns, so the prompt stays bounded
+					.memory(memory -> memory.eventFilter(EventFilter.lastN(500)))
+					.build())
+				.defaultAdvisors(MyLoggingAdvisor.builder().labelPrefix("[]").showAvailableTools(true).order(0).build())
 
-				.defaultAdvisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+				.defaultAdvisors(SessionAdvisors.session(sessionId))
 				.build();
 				// @formatter:on
 

@@ -2,15 +2,14 @@ package com.example.demo;
 
 import java.util.function.Function;
 
-import org.springaicommunity.typesafe.TypeSafeClient;
-import org.springaicommunity.typesafe.rag.JevDocumentFilter;
-import org.springaicommunity.typesafe.rag.JevDocumentReranker;
-
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.decision.DecisionModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
+import org.springframework.ai.rag.postretrieval.document.DecisionDocumentFilter;
+import org.springframework.ai.rag.postretrieval.document.DecisionDocumentReranker;
 import org.springframework.ai.rag.postretrieval.document.DocumentPostProcessor;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
@@ -45,7 +44,7 @@ public class DemoApplication {
 
 	@Bean
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, VectorStore vectorStore,
-			TypeSafeClient typeSafeClient, TaskExecutor taskExecutor) {
+			DecisionModel decisionModel, TaskExecutor taskExecutor) {
 		return args -> { // @formatter:off
 
 			// Load the PDF document, split it into chunks, and add to the vector store
@@ -75,13 +74,13 @@ public class DemoApplication {
 					.similarityThreshold(0.5)
 					.topK(4)
 					.build()))
-				// 4. Post-retrieval: print the chunks, let TypeSafe's Jev drop injected/irrelevant passages,
+				// 4. Post-retrieval: print the chunks, let the decision model (TypeSafe's Jev) drop injected/irrelevant passages,
 				//    rerank the rest by "could this answer the query?", keep the top 3 and print again
 				.documentPostProcessors(
 					print("[retrieved]", Document::getScore),
-					JevDocumentFilter.builder(typeSafeClient).build(),
-					JevDocumentReranker.builder(typeSafeClient).topK(3).build(),
-					print("[jev-reranked]", d -> d.getMetadata().get(JevDocumentReranker.SCORE_METADATA_KEY)))
+					DecisionDocumentFilter.builder(decisionModel).build(),
+					DecisionDocumentReranker.builder(decisionModel).topK(3).build(),
+					print("[decision-reranked]", d -> d.getMetadata().get(DecisionDocumentReranker.SCORE_METADATA_KEY)))
 				// 5. Generation: how the context is stuffed into the prompt
 				.queryAugmenter(ContextualQueryAugmenter.builder()
 					.allowEmptyContext(true)

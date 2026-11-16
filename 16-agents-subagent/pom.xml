@@ -39,6 +39,11 @@
 			<artifactId>spring-web</artifactId>
 		</dependency>
 
+		<!-- Session memory (SessionAdvisors) -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-session-advisor</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springaicommunity</groupId>
 			<artifactId>spring-ai-agent-utils</artifactId>

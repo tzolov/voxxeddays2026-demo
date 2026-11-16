@@ -6,7 +6,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.7</version>
+		<version>4.2.0-RC2</version>
 		<relativePath />
 	</parent>
 
@@ -21,8 +21,7 @@
 		<java.version>17</java.version>
 		<spring-ai.version>2.1.0-SNAPSHOT</spring-ai.version>
 		<spring-ai-agent-utils.version>0.14.0-SNAPSHOT</spring-ai-agent-utils.version>
-		<spring-ai-typesafe.version>0.4.0</spring-ai-typesafe.version>
-		<!-- <spring-ai-typesafe.version>0.5.0-SNAPSHOT</spring-ai-typesafe.version> -->
+		<spring-ai-decision-extensions.version>0.5.0-SNAPSHOT</spring-ai-decision-extensions.version>
 		<jena.version>5.4.0</jena.version>
 	</properties>
 
@@ -97,6 +96,14 @@
 				<groupId>org.springframework.ai</groupId>
 				<artifactId>spring-ai-bom</artifactId>
 				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<!-- Decision model components (judge, self-refine, guardrail) on Spring AI's DecisionModel -->
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-bom</artifactId>
+				<version>${spring-ai-decision-extensions.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>

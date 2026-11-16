@@ -8,7 +8,6 @@ import io.micrometer.observation.ObservationRegistry;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientBuilderCustomizer;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.tool.annotation.Tool;
@@ -61,7 +60,6 @@ public class LlmJudgeDemoApplication {
 
 			var answer = chatClient
 				.prompt("What is current weather in Paris?")
-				.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "conversation-id-1234"))
 				.call()
 				.content();
 

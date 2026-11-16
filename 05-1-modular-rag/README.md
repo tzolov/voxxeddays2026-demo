@@ -16,9 +16,9 @@ building block, following the paper
 | Pre-retrieval | `RewriteQueryTransformer` | Turns the verbose, chatty user question into a search-friendly query (LLM call) |
 | Pre-retrieval | `MultiQueryExpander` | Expands that query into 3 semantically diverse variants plus the original (LLM call) |
 | Retrieval | `VectorStoreDocumentRetriever` | Similarity search per query, top 4 above a 0.5 threshold; the default `ConcatenationDocumentJoiner` dedups the union |
-| Post-retrieval | lambda `DocumentPostProcessor` | Prints each chunk's similarity score and a snippet (used before and after the Jev stages) |
-| Post-retrieval | `JevDocumentFilter` | TypeSafe Jev screening: drops injected or irrelevant passages (see below) |
-| Post-retrieval | `JevDocumentReranker` | TypeSafe Jev reranking by "could this passage answer the query?", keeps the top 3 |
+| Post-retrieval | lambda `DocumentPostProcessor` | Prints each chunk's similarity score and a snippet (used before and after the decision stages) |
+| Post-retrieval | `DecisionDocumentFilter` | Decision model screening: drops injected or irrelevant passages (see below) |
+| Post-retrieval | `DecisionDocumentReranker` | Decision model reranking by "could this passage answer the query?", keeps the top 3 |
 | Generation | `ContextualQueryAugmenter` | Stuffs the context into the prompt; `allowEmptyContext(true)` lets the model answer even with no hits |
 
 ### Flow
@@ -41,10 +41,10 @@ flowchart TD
 
     subgraph POST[Post-retrieval]
         J --> P1[print retrieved chunks<br/>+ similarity score]
-        P1 --> F[JevDocumentFilter<br/>injection? contradiction? relevant? evidence?]
+        P1 --> F[DecisionDocumentFilter<br/>injection? contradiction? relevant? evidence?]
         F -- EXCLUDED --> X[/dropped/]
-        F -- INCLUDED / CONFLICTING --> R[JevDocumentReranker<br/>could this answer the query? keep top 3]
-        R --> P2[print reranked chunks<br/>+ Jev score]
+        F -- INCLUDED / CONFLICTING --> R[DecisionDocumentReranker<br/>could this answer the query? keep top 3]
+        R --> P2[print reranked chunks<br/>+ decision score]
     end
 
     subgraph GEN[Generation]
@@ -71,7 +71,8 @@ Claude model used in this demo no longer accepts the `temperature` option.
 
 - Java 17+ and Maven
 - `ANTHROPIC_API_KEY` for the Claude chat model
-- `TYPESAFE_API_KEY` for the Jev post-retrieval stages (the app fails fast at startup without it)
+- `TYPESAFE_API_KEY` for the decision model of the post-retrieval stages (TypeSafe's Jev); the app fails fast at
+  startup without it
 - Embeddings run locally through the transformers starter (ONNX model downloaded on first run)
 
 ## Running
@@ -84,7 +85,7 @@ Expected console output, in order:
 
 1. `[retrieve] ...` lines: the rewritten question and its expanded variants (interleaved, retrieval runs in parallel)
 2. `[retrieved] <similarity> <snippet>...` lines, one per chunk the joiner produced
-3. `[jev-reranked] <jev score> <snippet>...` lines, the top 3 after Jev screening and reranking
+3. `[decision-reranked] <decision score> <snippet>...` lines, the top 3 after screening and reranking
 4. The `MyLoggingAdvisor` dump of the augmented user prompt
 5. The final answer
 
@@ -92,31 +93,32 @@ The advisor runs the per-query retrievals in parallel. The demo passes it Spring
 `TaskExecutor` (virtual threads, see `spring.threads.virtual.enabled`) because the advisor's own default
 pool uses non-daemon threads that would keep this command-line app running after the answer is printed.
 
-## Jev screening and reranking
+## Decision model screening and reranking
 
-[Spring AI TypeSafe](https://spring-ai-community.github.io/spring-ai-typesafe/) ships two extra
-`DocumentPostProcessor`s backed by TypeSafe's Jev model, a small classifier that answers yes/no questions
-about a query and a passage with a calibrated score:
+Spring AI 2.1 (`spring-ai-rag`) ships two `DocumentPostProcessor`s backed by a `DecisionModel`, a small
+classifier that answers yes/no questions about a query and a passage with a calibrated probability:
 
 | Component | What it does |
 |---|---|
-| [JevDocumentFilter](https://spring-ai-community.github.io/spring-ai-typesafe/latest/rag/JevDocumentFilter/) | Asks four questions per passage (prompt injection, contradicts the query's premise, relevant, contains answer evidence) and drops injected or irrelevant passages. Contradicting passages are kept and tagged in metadata. |
-| [JevDocumentReranker](https://spring-ai-community.github.io/spring-ai-typesafe/latest/rag/JevDocumentReranker/) | Asks "could this passage answer the query?" per passage, sorts by that score (stored under `jev.rerank.score`) and keeps the top K. |
+| `DecisionDocumentFilter` | Asks four questions per passage (prompt injection, contradicts the query's premise, relevant, contains answer evidence) and drops injected or irrelevant passages. Contradicting passages are kept and tagged in metadata. |
+| `DecisionDocumentReranker` | Asks "could this passage answer the query?" per passage, sorts by that score (stored under `decision.rerank.score`) and keeps the top K. |
 
-The `spring-ai-starter-typesafe` auto-configures the `TypeSafeClient` from `spring.ai.typesafe.api-key`,
+The decision model here is TypeSafe's Jev, through Spring AI's System One provider:
+`spring-ai-starter-model-systemone` auto-configures a `DecisionModel` bean from `spring.ai.systemone.api-key`,
 which [application.properties](src/main/resources/application.properties) reads from `TYPESAFE_API_KEY`
-(add it to the repo-root `.env` or export it). The demo injects that client and passes it to both builders.
+(add it to the repo-root `.env` or export it). The OpenAI starter is on the classpath too and could contribute
+its own decision model, so `spring.ai.model.decision=systemone` picks one. The demo injects the `DecisionModel`
+and passes it to both builders; any other provider (OpenAI, Ollama) works the same way.
 
-Both components fail open: if the Jev API is unreachable the passages pass through unscreened or unscored
-and a warning is logged, so a bad key degrades to plain modular RAG rather than breaking the demo.
-
-The two artifacts (`spring-ai-starter-typesafe`, `typesafe-spring-ai`) come from Maven Central, version
-`0.3.0`, set by the `spring-ai-typesafe.version` property in the root pom.
+Both components fail open: if the decision model is unreachable the passages pass through unscreened or
+unscored and a warning is logged, so a wrong key or an outage degrades to plain modular RAG rather than breaking
+the demo. A missing key is different: the System One auto-configuration refuses to start without one.
+`DecisionDocumentFilter.builder(...).failClosed(true)` drops unscreened passages instead.
 
 ## Compared with 05-rag
 
 The ingestion code is identical. The only change is `QuestionAnswerAdvisor` becoming a
 `RetrievalAugmentationAdvisor` with explicit, swappable stages. Any stage can be replaced with your own
 implementation of `QueryTransformer`, `QueryExpander`, `DocumentRetriever`, `DocumentJoiner`,
-`DocumentPostProcessor` or `QueryAugmenter`. The Jev stages are an example of dropping in
-third-party post-processors without touching the rest of the pipeline.
+`DocumentPostProcessor` or `QueryAugmenter`. The decision stages are an example of dropping in
+post-processors backed by a different kind of model without touching the rest of the pipeline.

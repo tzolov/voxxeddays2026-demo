@@ -1,9 +1,9 @@
 package com.example.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -32,11 +32,12 @@ public class ToolMemoryDemoApplication {
 			// TOOL CALL & Memory
 			var output = chatClient.prompt()
 				.tools(new WeatherTools())
-				.advisors(
-					// ToolCallingAdvisor.builder().disableInternalConversationHistory().build(),
-					MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().build())
-						.order(Ordered.HIGHEST_PRECEDENCE + 1000).build())
-				.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "session-1234"))
+				// Session memory: the turn advisor (+200) outside the tool calling advisor (+300),
+				// the memory advisor (+1000) inside it, so each tool round is stored too
+				.advisors(SessionAdvisors.builder(DefaultSessionService.builder()
+					.sessionRepository(InMemorySessionRepository.builder().build())
+					.build()).build())
+				.advisors(SessionAdvisors.session("session-1234"))
 				.user("What should I wear today in Amsterdam and in Barcelona?")
 				.call().content();
 			System.out.println("\n" + output);
