@@ -10,7 +10,7 @@
 	</parent>
 	<artifactId>20-memory-session</artifactId>
 	<name>20 - Memory Session</name>
-	<description>Spring AI: chat memory with MessageWindowChatMemory</description>
+	<description>Spring AI: session memory with SessionAdvisors</description>
 
 	<dependencies>
 		<dependency>
@@ -22,23 +22,11 @@
 			<artifactId>spring-ai-starter-model-anthropic</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.springaicommunity</groupId>
-			<artifactId>spring-ai-session</artifactId>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-session-advisor</artifactId>
 		</dependency>
 
 	</dependencies>
-
-	<dependencyManagement>
-		<dependencies>
-			<dependency>
-				<groupId>org.springaicommunity</groupId>
-				<artifactId>spring-ai-session-bom</artifactId>
-				<version>${spring-ai-session.version}</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-		</dependencies>
-	</dependencyManagement>
 
 	<build>
 		<plugins>

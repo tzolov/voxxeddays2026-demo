@@ -498,7 +498,8 @@ compile-time dependencies on the libraries that define them. Every failure is sw
   round-trip each with JDBC-backed ones; `spring.ai.inspector.memory-snapshots=false` turns them off. The
   snapshot holds:
   - any `ChatMemory` field, e.g. `MessageChatMemoryAdvisor`, for the call's conversation id;
-  - any spring-ai-session `SessionService` field, including archived (compacted) events;
+  - any Spring AI `SessionService` field: the whole session log, with the events a compaction moved out of the active
+    view marked archived;
   - the files in `spring.ai.inspector.memory-dirs`.
 - **RAG setup** (`InspectorRagDescriber`): the stages of a `RetrievalAugmentationAdvisor` (query transformers,
   expander, retriever with `topK` and threshold, joiner, post-processors, augmenter) or a

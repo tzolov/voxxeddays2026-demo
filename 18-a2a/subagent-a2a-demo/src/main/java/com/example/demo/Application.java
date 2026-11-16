@@ -122,7 +122,11 @@ public class Application {
             try (Scanner scanner = new Scanner(System.in)) {
                 while (true) {
                     System.out.print("\nUSER: ");
-                    System.out.println("\nASSISTANT: " + chatClient.prompt(scanner.nextLine()).call().content());
+                    String userInput = scanner.nextLine();
+                    if (userInput.isBlank()) {
+                        continue; // an empty line, e.g. Enter pressed after background log output
+                    }
+                    System.out.println("\nASSISTANT: " + chatClient.prompt(userInput).call().content());
                 }
             }
         };

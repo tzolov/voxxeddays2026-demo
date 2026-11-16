@@ -28,23 +28,11 @@
 		</dependency>
 		<!-- Short-term memory and cross-session recall for the Dreamer -->
 		<dependency>
-			<groupId>org.springaicommunity</groupId>
-			<artifactId>spring-ai-session</artifactId>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-session-advisor</artifactId>
 		</dependency>
 
 	</dependencies>
-
-	<dependencyManagement>
-		<dependencies>
-			<dependency>
-				<groupId>org.springaicommunity</groupId>
-				<artifactId>spring-ai-session-bom</artifactId>
-				<version>${spring-ai-session.version}</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-		</dependencies>
-	</dependencyManagement>
 
 	<build>
 		<plugins>

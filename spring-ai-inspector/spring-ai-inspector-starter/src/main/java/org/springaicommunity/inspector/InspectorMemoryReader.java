@@ -23,8 +23,9 @@ import org.springframework.ai.chat.messages.Message;
  * Stores are found on the advisors of the chain:
  * <ul>
  * <li>{@code chat-memory}: any {@link ChatMemory} field (e.g. MessageChatMemoryAdvisor)</li>
- * <li>{@code session}: a spring-ai-session {@code SessionService} field
- * (SessionMemoryAdvisor), read reflectively, including archived (compacted) events</li>
+ * <li>{@code session}: a Spring AI {@code SessionService} field (SessionMemoryAdvisor,
+ * SessionTurnAdvisor), read reflectively: the whole log, with the events a compaction
+ * moved out of the active view marked archived</li>
  * <li>{@code files}: the directories named by {@code spring.ai.inspector.memory-dirs} (e.g.
  * 19-auto-memory sets it to its {@code agent.memory.dir})</li>
  * </ul>
@@ -34,6 +35,8 @@ class InspectorMemoryReader {
 	static final String CONVERSATION_ID = ChatMemory.CONVERSATION_ID;
 
 	private static final String SESSION_SERVICE = "org.springframework.ai.session.SessionService";
+
+	private static final String EVENT_FILTER = "org.springframework.ai.session.EventFilter";
 
 	private static final int MAX_FILE = 4000;
 
@@ -90,8 +93,20 @@ class InspectorMemoryReader {
 
 	private Map<String, Object> session(Advisor advisor, Object service, String sessionId) throws Exception {
 		Object events;
+		Set<Object> activeIds = new java.util.HashSet<>();
 		try {
+			// The whole log: what a compaction covered stays in it, the active view moves on
 			events = service.getClass().getMethod("getEvents", String.class).invoke(service, sessionId);
+			Class<?> eventFilter = Class.forName(EVENT_FILTER, false, service.getClass().getClassLoader());
+			Object active = eventFilter.getMethod("active").invoke(null);
+			Object activeEvents = service.getClass()
+				.getMethod("getEvents", String.class, eventFilter)
+				.invoke(service, sessionId, active);
+			if (activeEvents instanceof List<?> list) {
+				for (Object event : list) {
+					activeIds.add(call(event, "getId"));
+				}
+			}
 		}
 		catch (java.lang.reflect.InvocationTargetException ex) {
 			return null; // a service that rejects the id; an unknown session returns an empty list
@@ -101,8 +116,12 @@ class InspectorMemoryReader {
 		List<Map<String, Object>> items = new ArrayList<>();
 		if (events instanceof List<?> list) {
 			for (Object event : list) {
+				if (!Boolean.TRUE.equals(call(event, "hasMessage"))) {
+					continue; // a compaction boundary or another runtime event, not conversation
+				}
 				Map<String, Object> item = InspectorAdvisor.message((Message) call(event, "getMessage"));
-				item.put("archived", call(event, "isArchived"));
+				// archived: compacted out of the active view, still in the log
+				item.put("archived", !activeIds.contains(call(event, "getId")));
 				item.put("synthetic", call(event, "isSynthetic"));
 				item.put("ts", String.valueOf(call(event, "getTimestamp")));
 				items.add(item);

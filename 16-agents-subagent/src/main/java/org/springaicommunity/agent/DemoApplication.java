@@ -101,7 +101,11 @@ public class DemoApplication {
 			try (Scanner scanner = new Scanner(System.in)) {
 				while (true) {
 					System.out.print("\nUSER: ");
-					System.out.println("\nASSISTANT: " + chatClient.prompt(scanner.nextLine())
+					String userInput = scanner.nextLine();
+					if (userInput.isBlank()) {
+						continue; // an empty line, e.g. Enter pressed after background log output
+					}
+					System.out.println("\nASSISTANT: " + chatClient.prompt(userInput)
 						.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
 						.call()
 						.content());

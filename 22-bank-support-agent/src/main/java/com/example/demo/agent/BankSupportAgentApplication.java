@@ -47,8 +47,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *
  * Each capability is a plug that instruments the ChatClient: {@code customer_context}
  * contributes dynamic instructions and tools, {@link SkillsCapability} injects the
- * on-demand SkillsTool, {@link SessionMemoryCapability} injects the spring-ai-session
- * SessionMemoryAdvisor, and {@link McpCapability} exposes the tools of the exchange-rate
+ * on-demand SkillsTool, {@link SessionMemoryCapability} injects Spring AI's session
+ * advisors, and {@link McpCapability} exposes the tools of the exchange-rate
  * MCP server declared in {@code mcp-servers-config.json}.
  *
  * Run with: {@code mvn spring-boot:run

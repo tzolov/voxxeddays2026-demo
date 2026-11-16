@@ -9,7 +9,9 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.mcp.McpToolFilter;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,8 +41,8 @@ import org.springframework.core.io.Resource;
  * {@link SkillsTool}</li>
  * <li>{@code MCPServerStdio(...)} toolset → the auto-configured {@link ToolCallbackProvider}
  * over the stdio MCP server(s) declared in {@code mcp-servers-config.json}</li>
- * <li>(bonus) conversation continuity → {@link SessionMemoryAdvisor} from
- * spring-ai-session</li>
+ * <li>(bonus) conversation continuity → {@link SessionAdvisors} from Spring
+ * AI's session module</li>
  * </ul>
  */
 @SpringBootApplication
@@ -95,11 +97,12 @@ public class BankSupportApplication {
 				// MCP toolset: the exchange-rate server from mcp-servers-config.json
 				.defaultTools(mcpToolCallbackProvider)
 				.defaultToolContext(Map.of(SupportDependencies.TOOL_CONTEXT_KEY, deps))
-				.defaultAdvisors(
-					SessionMemoryAdvisor.builder(sessionService)
-						.defaultUserId("john")
-						.build(),
-					MyLoggingAdvisor.builder().build())
+				// Session memory: the turn advisor and the memory advisor around the tool loop
+				.defaultAdvisors(SessionAdvisors.builder(sessionService).build())
+				// The session is created on first use, owned by the customer
+				.defaultAdvisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY,
+					Map.of(SessionAttributes.PRINCIPAL_NAME, "john")))
+				.defaultAdvisors(MyLoggingAdvisor.builder().build())
 				.build();
 
 			var sessionId = "support-session-customer-" + deps.customerId();
@@ -113,7 +116,7 @@ public class BankSupportApplication {
 				SupportOutput result = supportAgent.prompt()
 					.system(s -> s.param("customerName", customerName))
 					.user(query)
-					.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+					.advisors(SessionAdvisors.session(sessionId))
 					.call()
 					.entity(SupportOutput.class);
 

@@ -12,7 +12,7 @@ On top of that, `AutoDreamAdvisor` and `AutoDreamService` keep the memory store 
 - **In-band consolidation**: The live agent tidies its memory when the user says "bye", or on the first message after 60 seconds of silence
 - **MEMORY.md index**: A two-step save workflow — each memory file is created, then registered in an index
 - **Out-of-band consolidation (dreaming)**: Every 3rd turn, a dream cycle runs in the background after the answer is returned, so it never adds latency. Type `/dream` to run one immediately
-- **Cross-session recall**: The Dreamer gets a read-only `cross_session_search` tool over the user's session history (`spring-ai-session`)
+- **Cross-session recall**: The Dreamer gets a read-only `cross_session_search` tool over the user's session history (Spring AI session memory). It finds the user's sessions by their `SessionAttributes.PRINCIPAL_NAME` metadata
 - **Seeded signal**: On first run the memory store gets two duplicate feedback memories and a dangling `MEMORY.md` link, and a two-day-old past session with a decision and a correction is seeded on every run, so the first dream has real work to do
 
 ### In-band nudge vs. dreaming
@@ -81,7 +81,7 @@ ASSISTANT> You're Alice and you prefer concise answers.
 | `MEMORY.md` | Index file listing all memory file pointers |
 | `AutoDreamService` | Runs a dream cycle: a Dreamer subagent with only the memory tools and `cross_session_search` |
 | `AutoDreamAdvisor` | Schedules dream cycles in the background from a persisted `DreamTrigger` |
-| `SessionMemoryAdvisor` | Session-scoped conversation history, compacted to the last 10 events after 20 turns; also what the Dreamer searches |
+| `SessionAdvisors` | Spring AI session memory: conversation history, compacted to the last 10 events after 20 turns; also what the Dreamer searches |
 
 ## Related Resources
 

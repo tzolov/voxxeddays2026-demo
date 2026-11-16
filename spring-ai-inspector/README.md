@@ -62,7 +62,7 @@ last event pointing at it has been dropped from the log.
   run. Vector stores are observed by wrapping `VectorStore` beans, because the demos build `SimpleVectorStore`
   without an ObservationRegistry.
 - **Memory after this call** step (03, 09, 19, 20): what each memory store holds after the call, with the entries this
-  call wrote highlighted. Chat memory (any advisor holding a `ChatMemory`), spring-ai-session events (archived and
+  call wrote highlighted. Chat memory (any advisor holding a `ChatMemory`), Spring AI session events (archived and
   summary events marked), and memory files (the folders named by `spring.ai.inspector.memory-dirs`).
 - Runs of 3+ systemOne checks (e.g. per-document RAG filtering) fold into one group under "On the wire". systemOne
   round-trips are labelled with who served them, e.g. `typesafe · system-one` or `ollama · system-one`.

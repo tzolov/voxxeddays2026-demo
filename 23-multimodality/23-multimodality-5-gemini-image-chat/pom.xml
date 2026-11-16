@@ -13,13 +13,6 @@
 	<name>23.5 - Gemini image chat</name>
 	<description>Spring AI: a chat model that answers with an image (Gemini image models), drawn then edited over two turns, as the inspector sees it without a proxy</description>
 
-	<properties>
-		<!-- Spring AI 2.1.0-M1 drops the image parts of a Gemini answer (the mapping to AssistantMessage media came
-		     with "Google GenAI to use message parts", 4ee251b, after M1). This module alone runs on the snapshot;
-		     remove the override with 2.1.0-M2. -->
-		<spring-ai.version>2.1.0-SNAPSHOT</spring-ai.version>
-	</properties>
-
 	<dependencies>
 		<dependency>
 			<groupId>com.example</groupId>

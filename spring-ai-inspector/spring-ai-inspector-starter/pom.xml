@@ -71,6 +71,12 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Test only: a real SessionService for the reflective session memory reader -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-session-advisor</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- Test only: Boot's observation auto-configuration, to prove the starter attaches to its registry once -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

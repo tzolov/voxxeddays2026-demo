@@ -23,7 +23,7 @@ The module ships the same agent in two styles:
 | `@agent.tool customer_balance(ctx: RunContext[Deps])` | `@Tool` method on `SupportTools` taking a `ToolContext` |
 | `refunds` capability with `defer_loading=True` | `refunds` skill loaded on demand through `SkillsTool` |
 | Harness `Skills('.agents/skills')` | `SkillsCapability` |
-| Harness `Memory(store)` | `SessionMemoryCapability` wrapping spring-ai-session's `SessionMemoryAdvisor` |
+| Harness `Memory(store)` | `SessionMemoryCapability` wrapping Spring AI's session advisors (`SessionAdvisors`) |
 | `MCPServerStdio(...)` toolset | `McpCapability` over the MCP client starter's `McpSyncClient`s (classic variant: the auto-configured `ToolCallbackProvider`) |
 | `DatabaseConn` over in-memory SQLite | `DatabaseConn` over in-memory H2 via `JdbcClient` |
 
@@ -163,8 +163,9 @@ tool name when two servers expose the same name.
 
 ### Session memory
 
-`SessionMemoryAdvisor` from spring-ai-session stores the conversation in an in-memory session repository under a session id
-derived from the customer id, so the second and third questions see the earlier turns.
+Spring AI's session advisors (`SessionAdvisors`) store the conversation in an in-memory session repository under a session
+id derived from the customer id, so the second and third questions see the earlier turns. The session is created on first
+use, owned by the customer (`SessionAttributes.PRINCIPAL_NAME`).
 
 ### The Agent facade
 
@@ -270,7 +271,7 @@ classDiagram
     SupportTools ..> SupportDependencies : from ToolContext
     SupportDependencies --> DatabaseConn
     SkillsCapability ..> ChatClient : SkillsTool
-    SessionMemoryCapability ..> ChatClient : SessionMemoryAdvisor
+    SessionMemoryCapability ..> ChatClient : SessionAdvisors
     AdvisorCapability ..> ChatClient : MyLoggingAdvisor
     WebFetchCapability ..> ChatClient : SmartWebFetchTool
     WebSearchCapability ..> ChatClient : BraveWebSearchTool
@@ -312,7 +313,7 @@ sequenceDiagram
     participant App as CLI runner
     participant A as Agent
     participant Cap as Capabilities
-    participant CC as ChatClient<br/>(SessionMemoryAdvisor, MyLoggingAdvisor)
+    participant CC as ChatClient<br/>(SessionAdvisors, MyLoggingAdvisor)
     participant LLM as Claude
     participant T as SupportTools
     participant DB as DatabaseConn / H2
@@ -352,7 +353,7 @@ passed as an advisor parameter.
 ## Dependencies
 
 - `spring-ai-starter-model-anthropic` for the Claude chat model
-- `spring-ai-session` for `SessionMemoryAdvisor`
+- `spring-ai-session-advisor` (Spring AI) for `SessionAdvisors`
 - `spring-ai-agent-utils` for `SkillsTool`, `SmartWebFetchTool` and `BraveWebSearchTool`
 - `spring-boot-starter-jdbc` and H2 for the in-memory customer database
 - `spring-ai-starter-mcp-client` for the stdio MCP client, `SyncMcpToolCallbackProvider` and the auto-configured `ToolCallbackProvider`

@@ -13,7 +13,7 @@ import org.springframework.ai.chat.client.ChatClient;
  * <ul>
  * <li>{@link #instrument(ChatClient.Builder)} — build-time: register tools, advisors, or
  * options on the agent's ChatClient (e.g. Memory injects a
- * {@code SessionMemoryAdvisor}, Skills injects the {@code SkillsTool})</li>
+ * session advisors, Skills injects the {@code SkillsTool})</li>
  * <li>{@link #instructions(Object)} — run-time: an instruction fragment for the system
  * prompt, resolved from the typed deps (Pydantic's {@code get_instructions()})</li>
  * <li>{@link #beforeRequest(ChatClient.ChatClientRequestSpec, Object)} — run-time:

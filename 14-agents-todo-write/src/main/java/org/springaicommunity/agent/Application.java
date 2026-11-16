@@ -12,12 +12,11 @@ import org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
-import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
-import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
+import org.springframework.ai.session.compaction.WindowCompactionStrategy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -67,15 +66,10 @@ public class Application {
 				)
 
 				// Advisors
-				.defaultAdvisors(
-					MyLoggingAdvisor.builder().showSystemMessage(true).build(),
-					SessionMemoryAdvisor.builder(DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build())
-						.defaultUserId("alice")
-						.compactionTrigger(new TurnCountTrigger(20))
-						.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-						.build()
-					// MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().maxMessages(500).build()) .build()
-				)
+				.defaultAdvisors(MyLoggingAdvisor.builder().showSystemMessage(true).build())
+				.defaultAdvisors(SessionAdvisors.builder(DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build())
+					.compaction(new TurnCountTrigger(20), WindowCompactionStrategy.builder().lastEvents(10).build())
+					.build())
 				.build();
 				// @formatter:on
 
@@ -85,8 +79,12 @@ public class Application {
 			try (Scanner scanner = new Scanner(System.in)) {
 				while (true) {
 					System.out.print("\n> USER: ");
-					System.out.println("\n> ASSISTANT: " + chatClient.prompt(scanner.nextLine())
-						.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "conversation-id-1234"))
+					String userInput = scanner.nextLine();
+					if (userInput.isBlank()) {
+						continue; // an empty line, e.g. Enter pressed after background log output
+					}
+					System.out.println("\n> ASSISTANT: " + chatClient.prompt(userInput)
+						.advisors(SessionAdvisors.session("conversation-id-1234"))
 						.toolContext(Map.of("session", "conversation-id-1234"))
 						.call()
 						.content());

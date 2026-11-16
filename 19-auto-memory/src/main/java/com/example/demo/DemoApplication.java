@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.UUID;
 
@@ -21,11 +22,13 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
-import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
+import org.springframework.ai.session.compaction.WindowCompactionStrategy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -107,20 +110,24 @@ public class DemoApplication {
 						.userId(userId) // the Dreamer may search this user's past sessions
 						.build(),
 
-					// Short-term memory, backed by the same SessionService the Dreamer searches
-					SessionMemoryAdvisor.builder(sessionService)
-						.defaultUserId(userId)
-						.compactionTrigger(new TurnCountTrigger(20))
-						.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-						.order(Ordered.HIGHEST_PRECEDENCE + 1000) // after tool calling advisor (+300) and logging advisor (+600)
-						.build(),
-
 					// Custom logging advisor
 					MyLoggingAdvisor.builder()
 						.showAvailableTools(false)
 						.showSystemMessage(false)
 						.order(Ordered.HIGHEST_PRECEDENCE + 1600) // after session memory advisor (+1000)
 						.build())
+
+				// Short-term memory, backed by the same SessionService the Dreamer searches.
+				// The session turn advisor (+200) runs outside the tool calling advisor (+300),
+				// the session memory advisor (+1000) inside it.
+				.defaultAdvisors(SessionAdvisors.builder(sessionService)
+					.compaction(new TurnCountTrigger(20), WindowCompactionStrategy.builder().lastEvents(10).build())
+					.build())
+
+				// Sessions created on first use are tagged with the user, so the Dreamer's
+				// cross_session_search (scoped to that user) can find them
+				.defaultAdvisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY,
+					Map.of(SessionAttributes.PRINCIPAL_NAME, userId)))
 				.build();
 				// @formatter:on
 
@@ -132,6 +139,9 @@ public class DemoApplication {
 				while (true) {
 					System.out.print("\n\033[1;34mUSER>\033[0m ");
 					String userInput = scanner.nextLine();
+					if (userInput.isBlank()) {
+						continue; // an empty line, e.g. Enter pressed after a background dream log
+					}
 
 					if ("/dream".equalsIgnoreCase(userInput.trim())) {
 						System.out.println("\n\033[1;35mDREAM>\033[0m consolidating memory...");
@@ -141,7 +151,7 @@ public class DemoApplication {
 					}
 
 					System.out.println("\n\033[1;34mASSISTANT>\033[0m " + chatClient.prompt(userInput)
-						.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+						.advisors(SessionAdvisors.session(sessionId))
 						.call()
 						.content());
 				}
@@ -202,7 +212,8 @@ public class DemoApplication {
 	 * store is in-memory.
 	 */
 	private static void seedPastSession(SessionService sessionService, String userId) {
-		var pastSession = sessionService.create(CreateSessionRequest.builder().userId(userId).build());
+		var pastSession = sessionService
+			.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, userId).build());
 		Instant twoDaysAgo = Instant.now().minus(Duration.ofDays(2));
 
 		sessionService.appendEvent(SessionEvent.builder()
