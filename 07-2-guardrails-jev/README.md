@@ -43,6 +43,8 @@ and points the person to help, and a blocked input never reaches the model.
 With chat memory in the chain, use `DecisionGuardrailAdvisor.input(decisionModel)` and `output(decisionModel)`
 instead, so a blocked message is never remembered.
 
+![The guardrail advisor screens the question and the answer with one decision call each; a blocked question never reaches the chat model](guardrails-decision-model.svg)
+
 ## What the demo shows
 
 | Question | Expected outcome |

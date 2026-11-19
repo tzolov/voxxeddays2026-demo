@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "exchange-rates": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cyanheads/exchange-rates-mcp-server@0.4.1"
+      ],
+      "env": {}
+    }
+  }
+}

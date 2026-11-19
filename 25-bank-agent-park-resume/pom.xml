@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.example</groupId>
+		<artifactId>voxxeddays2026-demo</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+	</parent>
+	<artifactId>25-bank-agent-park-resume</artifactId>
+	<name>25 - Bank Agent: confirm, park and resume</name>
+	<description>A bank support agent under control: tools on existing services, PII masking, session memory in a
+		database, a tool call that needs a confirmation, and a turn that is parked and resumed by another process</description>
+
+	<properties>
+		<!-- Not released yet: install it from https://github.com/spring-ai-community/spring-ai-session-extensions
+		     with ./mvnw install -DskipTests -->
+		<spring-ai-session-extensions.version>0.1.0-SNAPSHOT</spring-ai-session-extensions.version>		
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>com.example</groupId>
+			<artifactId>common</artifactId>
+		</dependency>
+		<!-- Two chat models on the classpath; spring.ai.model.chat picks one -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-anthropic</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
+		</dependency>
+		<!-- Spring AI 2.1 session memory in a database: the JDBC session repository, the SessionService
+		     and the session advisors, auto-configured on the application's DataSource -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-session-jdbc</artifactId>
+		</dependency>
+		<!-- Spring AI Session Extensions (community): the turn status, park and resume -->
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-session-turn-advisor</artifactId>
+			<version>${spring-ai-session-extensions.version}</version>
+		</dependency>
+		<!-- The MCP client: the tools of the MCP servers declared in mcp-servers-config.json -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-mcp-client</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-agent-utils</artifactId>
+			<version>${spring-ai-agent-utils.version}</version>
+		</dependency>
+
+		<!-- A file-based SQL database standing in for the bank's systems of record and for the session store -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<!-- The audit trail, with the 'otel' profile and the Grafana stack of 24-observability/docker:
+		     metrics scraped from /actuator/prometheus, traces over OTLP to Tempo, logs to Loki -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-opentelemetry</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.github.loki4j</groupId>
+			<artifactId>loki-logback-appender</artifactId>
+			<version>2.0.0</version>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
