@@ -30,12 +30,9 @@ the database by the JDBC session repository, so a second process can resume the 
 - Node.js with `npx`, for the MCP server. `mcp-servers-config.json` starts
   `@cyanheads/exchange-rates-mcp-server` (ECB reference rates). It needs the network, and the first start
   downloads the package.
-- Spring AI Session Extensions is not released yet. Install it once:
 
-  ```bash
-  git clone https://github.com/spring-ai-community/spring-ai-session-extensions
-  cd spring-ai-session-extensions && ./mvnw install -DskipTests
-  ```
+All dependencies are released versions from Maven Central: Spring AI 2.1.0, Spring AI Session Extensions 0.11.0
+and Spring AI Agent Utils 0.14.0.
 
 ## Run
 

@@ -85,6 +85,6 @@ ASSISTANT> You're Alice and you prefer concise answers.
 
 ## Related Resources
 
-- [AutoMemoryTools Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest-snapshot/tools/AutoMemoryTools/)
-- [AutoDreamService Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest-snapshot/tools/AutoDreamService/)
-- [AutoDreamAdvisor Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest-snapshot/tools/AutoDreamAdvisor/)
+- [AutoMemoryTools Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest/tools/AutoMemoryTools/)
+- [AutoDreamService Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest/tools/AutoDreamService/)
+- [AutoDreamAdvisor Documentation](https://spring-ai-community.github.io/spring-ai-agent-utils/latest/tools/AutoDreamAdvisor/)

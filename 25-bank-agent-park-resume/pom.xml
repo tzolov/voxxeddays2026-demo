@@ -16,7 +16,7 @@
 	<properties>
 		<!-- Not released yet: install it from https://github.com/spring-ai-community/spring-ai-session-extensions
 		     with ./mvnw install -DskipTests -->
-		<spring-ai-session-extensions.version>0.1.0-SNAPSHOT</spring-ai-session-extensions.version>		
+		<spring-ai-session-extensions.version>0.11.0</spring-ai-session-extensions.version>
 	</properties>
 
 	<dependencies>

@@ -121,5 +121,5 @@ mvn -pl 07-2-guardrails-jev spring-boot:run
 
 A well-aligned model like Claude rarely produces an answer the output battery must stop, so this demo only shows
 input-side refusals. See the
-[DecisionGuardrailAdvisor documentation](https://spring-ai-community.github.io/spring-ai-decision-extensions/latest-snapshot/guardrails/DecisionGuardrailAdvisor/)
+[DecisionGuardrailAdvisor documentation](https://spring-ai-community.github.io/spring-ai-decision-extensions/latest/guardrails/DecisionGuardrailAdvisor/)
 for the output battery, the thresholds and streaming.
