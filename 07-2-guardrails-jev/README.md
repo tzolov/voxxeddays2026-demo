@@ -119,6 +119,26 @@ Requires `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY` (read into `spring.ai.system
 mvn -pl 07-2-guardrails-jev spring-boot:run
 ```
 
+### Without a TypeSafe key: the `ollama` profile
+
+The same code runs with a local decision model. The chat model stays Claude, so `ANTHROPIC_API_KEY` is
+still needed.
+
+```bash
+ollama pull d1-omni:600m
+mvn -pl 07-2-guardrails-jev spring-boot:run -Dspring-boot.run.profiles=ollama
+```
+
+The profile sets two properties, in `application-ollama.properties`:
+
+- `spring.ai.model.decision=ollama` picks the Ollama decision model. Both starters are on the classpath.
+- `demo.guardrail.block-on-review=true` refuses a borderline result too. The small local model puts the
+  self-harm signal of the third question in the review band, between 0.35 and 0.70, where a turn passes by
+  default. With the property the question gets the support message, as with Jev.
+
+Thresholds belong to a model. [26-decision-models](../26-decision-models) prints the scores of both models
+for the same three questions.
+
 A well-aligned model like Claude rarely produces an answer the output battery must stop, so this demo only shows
 input-side refusals. See the
 [DecisionGuardrailAdvisor documentation](https://spring-ai-community.github.io/spring-ai-decision-extensions/latest/guardrails/DecisionGuardrailAdvisor/)

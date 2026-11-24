@@ -12,6 +12,7 @@ import org.springframework.ai.decision.question.ScoreQuestion;
 import org.springframework.ai.decision.question.YesNoQuestion;
 import org.springframework.ai.systemone.api.SystemOneRetryUtils;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -36,7 +37,8 @@ public class ModelJudgeDemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DecisionModel decisionModel) {
+	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DecisionModel decisionModel,
+			@Value("${demo.judge.plausible-threshold}") double plausibleThreshold) {
 		return args -> { // @formatter:off
 
 			ChatClient chatClient = chatClientBuilder
@@ -48,7 +50,7 @@ public class ModelJudgeDemoApplication {
 				// of each attempt are recorded for the judge as `tool_calls`.
 				.defaultAdvisors(DecisionSelfRefineAdvisor.builder()
 					.order(DecisionSelfRefineAdvisor.BEFORE_TOOLS_ORDER)
-					.judge(createWeatherJudge(decisionModel))
+					.judge(createWeatherJudge(decisionModel, plausibleThreshold))
 					.maxRepeatAttempts(10)
 					// a System One outage is transient too: the answer passes unjudged instead of failing
 					.transientErrorPredicate(((Predicate<Throwable>) DecisionSelfRefineAdvisor::isTransient)
@@ -92,7 +94,7 @@ public class ModelJudgeDemoApplication {
 	 * {@code is_plausible} alone, instead of averaging the problem away into a middling
 	 * score.
 	 */
-	static DecisionJudge createWeatherJudge(DecisionModel decisionModel) { // @formatter:off
+	static DecisionJudge createWeatherJudge(DecisionModel decisionModel, double plausibleThreshold) { // @formatter:off
 		return DecisionJudge.builder(decisionModel)
 			.score("helpfulness", ScoreQuestion.builder()
 					.text("How well does `assistant_answer` address the question in `user_question`?")
@@ -106,7 +108,7 @@ public class ModelJudgeDemoApplication {
 					.whenYes("Every value is within a range that can actually occur")
 					.whenNo("At least one value is impossible, such as a temperature below absolute zero "
 							+ "or far outside anything ever recorded on Earth")
-					.build(), 0.7d)
+					.build(), plausibleThreshold)
 			.yesNo("is_grounded", YesNoQuestion.builder()
 					.text("Does `assistant_answer` stay within what `user_question` asked, without asserting unrelated facts? "
 							+ "The assistant has a weather tool, so specific weather values for the place asked "

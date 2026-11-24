@@ -26,6 +26,11 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-systemone</artifactId>
 		</dependency>
+		<!-- A local decision model, for the 'ollama' profile; spring.ai.model.decision picks one -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-ollama</artifactId>
+		</dependency>
 		<!-- DecisionSelfRefineAdvisor and DecisionJudge -->
 		<dependency>
 			<groupId>org.springaicommunity</groupId>

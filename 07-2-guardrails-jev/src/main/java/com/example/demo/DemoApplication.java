@@ -8,6 +8,7 @@ import org.springaicommunity.decision.guardrail.DecisionGuardrailAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.decision.DecisionModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -22,7 +23,8 @@ public class DemoApplication {
 	}
 
 	@Bean
-	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DecisionModel decisionModel) {
+	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DecisionModel decisionModel,
+			@Value("${demo.guardrail.block-on-review}") boolean blockOnReview) {
 		return args -> { // @formatter:off
 
 			ChatClient chatClient = chatClientBuilder
@@ -51,6 +53,8 @@ public class DemoApplication {
 								"Content that could encourage self-harm", DecisionGuardrail.Outcome.SUPPORT)
 						.build())
 					.refusal("I can't help with that.")
+					// a borderline result is refused too, with the action of its hazard
+					.blockOnReview(blockOnReview)
 					.build(),
 					// Ordered nearer the model than the guardrail: it prints only when the model is actually called
 					MyLoggingAdvisor.builder().order(Ordered.LOWEST_PRECEDENCE - 500).build())
