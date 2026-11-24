@@ -63,6 +63,7 @@
 		<module>23-multimodality/23-multimodality-5-gemini-image-chat</module>
 		<module>24-observability</module>
 		<module>25-bank-agent-park-resume</module>
+		<module>26-decision-models</module>
 
 	</modules>
 
