@@ -14,8 +14,6 @@
 		database, a tool call that needs a confirmation, and a turn that is parked and resumed by another process</description>
 
 	<properties>
-		<!-- Not released yet: install it from https://github.com/spring-ai-community/spring-ai-session-extensions
-		     with ./mvnw install -DskipTests -->
 		<spring-ai-session-extensions.version>0.11.0</spring-ai-session-extensions.version>
 	</properties>
 

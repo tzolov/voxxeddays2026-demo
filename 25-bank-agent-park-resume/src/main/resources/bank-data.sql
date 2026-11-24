@@ -1,4 +1,4 @@
--- The bank's data, reset on every start. The dates fit demo.today (2026-11-19).
+-- The bank's data, reset when a new conversation starts. The dates fit demo.today (2026-11-19).
 DELETE FROM mortgage_payments;
 DELETE FROM customers;
 

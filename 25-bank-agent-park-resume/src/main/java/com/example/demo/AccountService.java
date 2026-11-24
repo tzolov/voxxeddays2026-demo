@@ -1,5 +1,7 @@
 package com.example.demo;
 
+import java.math.BigDecimal;
+
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -26,16 +28,16 @@ public class AccountService {
 			.orElse("customer");
 	}
 
+	public BigDecimal balance(int customerId) {
+		return this.jdbcClient.sql("SELECT balance FROM customers WHERE id = :id")
+			.param("id", customerId)
+			.query(BigDecimal.class)
+			.single();
+	}
+
 	@Tool(description = "Returns the customer's current account balance in CHF.")
 	public String accountBalance(ToolContext toolContext) {
-		
-		int customerId = CustomerIdentity.from(toolContext).customerId();
-
-		Double balance = this.jdbcClient.sql("SELECT balance FROM customers WHERE id = :id")
-			.param("id", customerId)
-			.query(Double.class)
-			.single();
-		return String.format("CHF %.2f", balance);
+		return "CHF " + balance(CustomerIdentity.from(toolContext).customerId());
 	}
 
 }

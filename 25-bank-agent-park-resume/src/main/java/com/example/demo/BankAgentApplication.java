@@ -1,24 +1,33 @@
 package com.example.demo;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.stream.Collectors;
+
+import javax.sql.DataSource;
 
 import org.springaicommunity.agent.tools.SkillsTool;
+import org.springaicommunity.session.turn.Answer;
+import org.springaicommunity.session.turn.Question;
 import org.springaicommunity.session.turn.ToolConfirmationQuestion;
+import org.springaicommunity.session.turn.TurnEventTypes;
 import org.springaicommunity.session.turn.TurnService;
 import org.springaicommunity.session.turn.TurnStatus;
 import org.springaicommunity.session.turn.advisor.TurnAdvisors;
 import org.springaicommunity.session.turn.advisor.TurnStatusAdvisor;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.mcp.McpToolFilter;
 import org.springframework.ai.mcp.ToolContextToMcpMetaConverter;
 import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -28,8 +37,10 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Profile;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.util.StringUtils;
 
 /**
  * A bank support agent under control.
@@ -49,14 +60,14 @@ import org.springframework.core.io.Resource;
  * <li>what happens to a paused turn: the turn advisors of Spring AI Session Extensions
  * park it in the session log and resume it later from the approver's decision, in another
  * process;</li>
- * <li>what leaves the bank: the exchange rates come from an MCP server, and nothing of
- * the tool context, so not the customer id either, is sent to it.</li>
+ * <li>what leaves the bank ('full' profile): the exchange rates come from an MCP server,
+ * and nothing of the tool context, so not the customer id either, is sent to it.</li>
  * </ul>
  *
  * Run it twice. The first run talks to the agent until the turn parks, and exits. The
  * second run finds the parked turn in the database, asks for the approval and resumes the
- * turn. The conversation then goes on with a question that needs a skill and one that
- * needs the MCP server.
+ * turn. With the 'full' profile the conversation then goes on with a question that needs
+ * a skill and one that needs the MCP server.
  */
 @SpringBootApplication
 public class BankAgentApplication {
@@ -69,9 +80,9 @@ public class BankAgentApplication {
 			When a payment failed, say why and what happens next. Keep replies to three sentences.""";
 
 	public static void main(String[] args) {
-		// The MCP client's threads keep the JVM alive, so close the context when the
-		// conversation is
-		// over, and stop the MCP server process that npx started
+		// Close the context when the conversation is over. On the 'full' profile the MCP
+		// client's threads keep the JVM alive, and the MCP server process that npx
+		// started must be stopped
 		int exitCode = SpringApplication.exit(SpringApplication.run(BankAgentApplication.class, args));
 		ProcessHandle.current().descendants().forEach(ProcessHandle::destroy);
 		System.exit(exitCode);
@@ -99,10 +110,26 @@ public class BankAgentApplication {
 	@Bean
 	public CommandLineRunner cli(ChatClient.Builder chatClientBuilder, SessionService sessionService,
 			ToolCallingManager toolCallingManager, AccountService accounts, MortgageService mortgages,
-			ObjectProvider<ToolCallbackProvider> mcpToolCallbackProvider, @Value("${demo.customer-id}") int customerId,
-			@Value("${demo.today}") String today, @Value("${agent.skills.dirs}") List<Resource> skillsDirs) {
+			ObjectProvider<ToolCallbackProvider> mcpToolCallbackProvider, DataSource dataSource,
+			@Value("${demo.customer-id}") int customerId, @Value("${demo.today}") String today,
+			@Value("${demo.full:false}") boolean full, @Value("${demo.new-message:}") String newMessage,
+			@Value("${agent.skills.dirs}") List<Resource> skillsDirs) {
 
 		return args -> { // @formatter:off
+
+			var sessionId = "support-session-customer-" + customerId;
+
+			var turns = new TurnService(sessionService);
+
+			// All a new process knows is the session id. Does a turn of this session wait for a person?
+			boolean parked = turns.status(sessionId).isParked();
+
+			if (!parked) {
+				// A new conversation starts clean. The bank's data and the session log are in the database
+				// and outlive the process
+				new ResourceDatabasePopulator(new ClassPathResource("bank-data.sql")).execute(dataSource);
+				sessionService.delete(sessionId);
+			}
 
 			// The authenticated customer, as the channel (app, IVR) would hand it over
 			var customer = new CustomerIdentity(customerId);
@@ -112,8 +139,8 @@ public class BankAgentApplication {
 				.defaultSystem(s -> s.text(INSTRUCTIONS).param("customerName", customerName).param("today", today))
 				// the bank's services
 				.defaultTools(accounts, mortgages)
-				// an MCP server: exchange rates
-				.defaultTools(mcpToolCallbackProvider.getIfAvailable())
+				// an MCP server: exchange rates ('full' profile; no tools without it)
+				.defaultTools(mcpToolCallbackProvider.getIfAvailable(() -> ToolCallbackProvider.from(List.of())))
 				// the skills from the classpath (community)
 				.defaultTools(SkillsTool.builder().addSkillsResources(skillsDirs).build())
 				// who the customer is
@@ -128,39 +155,54 @@ public class BankAgentApplication {
 				.defaultAdvisors(MyLoggingAdvisor.builder().showSystemMessage(false).showAvailableTools(true).build())
 				.build();
 
-			var sessionId = "support-session-customer-" + customerId;
-			
-			var turns = new TurnService(sessionService);
-
-			if (!turns.status(sessionId).isParked()) {				
-				// First run: a new conversation
-				// Start clean: the session log is in the database and outlives the process
-				sessionService.delete(sessionId);
-
-				talk(agent, turns, sessionId,
+			if (!parked) {
+				// First run: a new conversation, until a turn parks
+				boolean paused = talk(agent, sessionId,
 						"My mortgage payment from CH93 0076 2011 6238 5295 7 did not go out this month, what happened?",
 						"I have the money now. Please collect it today.");
 
+				if (paused) {
+					printLog(sessionService, sessionId, newestTurnStart(sessionService, sessionId));
+					System.out.println("\nThe pause is in the session log, not in this process. Run the demo again to decide.");
+				}
 			}
 			else {
-				// Second run: another process, later. All it knows is the session id.
-				resume(agent, turns, sessionId);
+				// Second run: another process, later
+				int parkedTurnStart = newestTurnStart(sessionService, sessionId);
+
+				if (StringUtils.hasText(newMessage)) {
+					// The customer writes something new instead of waiting for the approver. New text moves a
+					// parked session on: the turn advisor denies the open calls, and the text goes to the model
+					talk(agent, sessionId, newMessage);
+				}
+				else {
+					// Nothing ran while the turn was parked
+					System.out.println("\nThe account balance is CHF " + accounts.balance(customerId) + ". The parked turn waits on:");
+					resume(agent, turns, sessionId);
+				}
+
+				// The whole turn, as the two processes wrote it
+				printLog(sessionService, sessionId, parkedTurnStart);
 
 				// The conversation goes on: the session log holds every turn, also the ones of the first process
-				talk(agent, turns, sessionId, "And next month?");
+				talk(agent, sessionId, "And next month?");
 
-				// A question about a procedure: the model loads the 'refunds' skill, only now
-				talk(agent, turns, sessionId, "I was charged twice for the same CHF 620 purchase. When do I get my money back?");
+				if (full) {
+					// A question about a procedure: the model loads the 'refunds' skill, only now
+					talk(agent, sessionId, "I was charged twice for the same CHF 620 purchase. When do I get my money back?");
 
-				// A question the bank's own services cannot answer: the model calls the MCP server
-				talk(agent, turns, sessionId, "How much is one payment in euros, at the latest rate?");
-
+					// A question the bank's own services cannot answer: the model calls the MCP server
+					talk(agent, sessionId, "How much is one payment in euros, at the latest rate?");
+				}
 			}
 		}; // @formatter:on
 	}
 
-	/** Sends the customer's messages, one turn each, until a turn parks. */
-	private static void talk(ChatClient agent, TurnService turns, String sessionId, String... messages) {
+	/**
+	 * Sends the customer's messages, one turn each, until a turn parks.
+	 * @return true when a turn parked
+	 */
+	private static boolean talk(ChatClient agent, String sessionId, String... messages) {
 		for (String message : messages) {
 			ChatResponse response = agent.prompt()
 				.user(message)
@@ -170,11 +212,10 @@ public class BankAgentApplication {
 
 			// A paused reply names the tool calls that wait for a person
 			if (!ToolCallDecisions.awaitingDecision(response).isEmpty()) {
-				System.out
-					.println("\nThe pause is in the session log, not in this process. Run the demo again to decide.");
-				return;
+				return true;
 			}
 		}
+		return false;
 	}
 
 	/**
@@ -183,48 +224,102 @@ public class BankAgentApplication {
 	 */
 	private static void resume(ChatClient agent, TurnService turns, String sessionId) {
 
-		ToolConfirmationQuestion question = printPendingCalls(turns, sessionId);
-
-		boolean approved = askApprover();
-
-		// One decision for each tool call of the paused reply
-		List<ToolCallDecision> decisions = question.toolCalls()
-			.stream()
-			.map(call -> !call.awaitingDecision() || approved ? ToolCallDecision.allow(call.key())
-					: ToolCallDecision.deny(call.key(), "The approver declined the collection."))
-			.toList();
-
-		// A call with the decisions and no user message: the allowed tools run, and the
-		// turn goes on
-		String answer = agent.prompt()
-			.advisors(TurnStatusAdvisor.decisions(sessionId, new ToolCallDecisions(decisions)))
-			.advisors(TurnStatusAdvisor.runId(turns.status(sessionId).runId()))
-			.call()
-			.content();
-
-		// The parked turn has ended
-		// TurnStatus status = turns.status(sessionId);
-		// System.out.println("\nstatus: " + status.status() + " / " +
-		// status.stopReason());
-	}
-
-	private static ToolConfirmationQuestion printPendingCalls(TurnService turns, String sessionId) {
 		ToolConfirmationQuestion question = ToolConfirmationQuestion.from(turns.pendingQuestion(sessionId));
+
 		for (ToolConfirmationQuestion.ToolCall call : question.toolCalls()) {
 			System.out.println("  " + call.name() + " " + call.arguments()
 					+ (call.awaitingDecision() ? "   <- needs a decision" : ""));
 		}
-		return question;
+
+		// 'y' allows. Anything else declines, and a typed sentence is the reason: it goes to
+		// the model as the result of the call
+		String typed = askApprover();
+		boolean approved = typed.equalsIgnoreCase("y") || typed.equalsIgnoreCase("yes");
+		String reason = (typed.isEmpty() || typed.equalsIgnoreCase("n") || typed.equalsIgnoreCase("no"))
+				? "The approver declined the collection." : typed;
+
+		// One decision for each tool call of the paused reply. A call that needs no
+		// confirmation has not run either, so it is allowed here
+		List<ToolCallDecision> decisions = question.toolCalls()
+			.stream()
+			.map(call -> !call.awaitingDecision() || approved ? ToolCallDecision.allow(call.key())
+					: ToolCallDecision.deny(call.key(), reason))
+			.toList();
+
+		// A call with the decisions and no user message: the allowed tools run, and the
+		// turn goes on
+		agent.prompt()
+			.advisors(TurnStatusAdvisor.decisions(sessionId, new ToolCallDecisions(decisions)))
+			// Optional: keeps the run id of the parked turn. Without it the resume runs
+			// under a new one
+			.advisors(TurnStatusAdvisor.runId(turns.status(sessionId).runId()))
+			.call()
+			.content();
 	}
 
 	/**
-	 * The decision: the answer typed on the console.
+	 * The approver's answer, typed on the console.
 	 */
-	private static boolean askApprover() {
-		System.out.print("\nApprove? [y/N]: ");
+	private static String askApprover() {
+		System.out.print("\nApprove? [y/N, or a reason to decline]: ");
 		System.out.flush();
 		Scanner console = new Scanner(System.in);
-		return console.hasNextLine() && console.nextLine().trim().toLowerCase().startsWith("y");
+		return console.hasNextLine() ? console.nextLine().trim() : "";
+	}
+
+	/**
+	 * The index of the event that starts the newest turn: the turn status in front of the
+	 * last user message.
+	 */
+	private static int newestTurnStart(SessionService sessionService, String sessionId) {
+		List<SessionEvent> events = sessionService.getEvents(sessionId);
+		for (int i = events.size() - 1; i >= 0; i--) {
+			if (events.get(i).hasMessage() && events.get(i).getMessageType() == MessageType.USER) {
+				return (i > 0 && events.get(i - 1).getType().equals(TurnEventTypes.STATUS)) ? i - 1 : i;
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * Prints the session log from one event on: the messages Spring AI session memory
+	 * stored, and the turn events Session Extensions wrote next to them.
+	 */
+	private static void printLog(SessionService sessionService, String sessionId, int from) {
+		List<SessionEvent> events = sessionService.getEvents(sessionId);
+		System.out.println("\nThe turn in the session log:");
+		for (SessionEvent event : events.subList(from, events.size())) {
+			String line = describe(event).replace('\n', ' ');
+			System.out.println("  %-14s %s".formatted(event.getType().name(),
+					line.length() > 110 ? line.substring(0, 110) + " ..." : line));
+		}
+	}
+
+	private static String describe(SessionEvent event) {
+		if (event.getType().equals(TurnEventTypes.STATUS)) {
+			TurnStatus status = TurnStatus.from(event);
+			return status.status() + (status.stopReason() != null ? " / " + status.stopReason() : "")
+					+ (status.isParked() ? "   <- parked" : "");
+		}
+		if (event.getType().equals(TurnEventTypes.QUESTION)) {
+			return Question.from(event).kind();
+		}
+		if (event.getType().equals(TurnEventTypes.ANSWER)) {
+			return String.valueOf(Answer.from(event).value());
+		}
+		if (event.getMessage() instanceof AssistantMessage reply && reply.hasToolCalls()) {
+			return "ASSISTANT calls " + reply.getToolCalls()
+				.stream()
+				.map(call -> call.name() + " " + call.arguments())
+				.collect(Collectors.joining(", "));
+		}
+		if (event.getMessage() instanceof ToolResponseMessage results) {
+			return "TOOL " + results.getResponses()
+				.stream()
+				.map(result -> result.name() + ": " + result.responseData())
+				.collect(Collectors.joining(", "));
+		}
+		return event.getMessageType() + " " + event.getMessage().getText();
 	}
 
 }
