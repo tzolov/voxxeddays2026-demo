@@ -51,6 +51,9 @@ public class ModelJudgeDemoApplication {
 				.defaultAdvisors(DecisionSelfRefineAdvisor.builder()
 					.order(DecisionSelfRefineAdvisor.BEFORE_TOOLS_ORDER)
 					.judge(createWeatherJudge(decisionModel, plausibleThreshold))
+					// The tool returns an absurd temperature two times out of three, so the budget
+					// is generous: 3 retries, as in the blog post, would still end on a rejected
+					// answer in about one run out of five, 10 in about one out of a hundred.
 					.maxRepeatAttempts(10)
 					// a System One outage is transient too: the answer passes unjudged instead of failing
 					.transientErrorPredicate(((Predicate<Throwable>) DecisionSelfRefineAdvisor::isTransient)

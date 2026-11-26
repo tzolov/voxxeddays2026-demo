@@ -27,8 +27,9 @@ mvn -pl 11-1-agents-model-as-a-judge spring-boot:run
 ```
 
 The `[TOOL]` lines show the temperature the tool returned, and the advisor logs each judgement. The
-temperature is random, so the number of attempts varies from run to run. A run where the first temperature
-was a real one:
+temperature is random, so the number of attempts varies from run to run. Two temperatures out of three are
+absurd, which is why the demo allows 10 retries: with 3, as in the blog post, about one run in five would
+still end on a rejected answer. A run where the first temperature was a real one:
 
 ```
 [TOOL] weather tool response temperature: 15
